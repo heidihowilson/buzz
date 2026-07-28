@@ -1946,6 +1946,8 @@ function MarkdownInner({
   }
 
   const resolvedLinkPreviews = useResolvedLinkPreviews(linkPreviews);
+  const previewNoun =
+    resolvedLinkPreviews.length === 1 ? "preview" : "previews";
 
   // When a config-nudge suppresses the prose (selectProseOrNudge returns
   // null), skip the parse entirely — it would be thrown away unrendered.
@@ -1996,27 +1998,22 @@ function MarkdownInner({
             </AttachmentGroup>
           ) : null}
           {resolvedLinkPreviews.length > 0 ? (
-            <div className="space-y-1.5" data-link-preview-container="">
-              <AttachmentGroup
-                className="max-w-full flex-wrap overflow-visible pb-0"
-                data-link-preview-list=""
-              >
-                {resolvedLinkPreviews.map((preview) => (
-                  <LinkPreviewAttachment key={preview.href} preview={preview} />
-                ))}
-              </AttachmentGroup>
-              {onRemoveLinkPreviewsForEveryone ? (
-                <div className="text-2xs text-muted-foreground">
-                  <button
-                    className="hover:text-destructive hover:underline"
-                    onClick={() => setRemovePreviewDialogOpen(true)}
-                    type="button"
-                  >
-                    Remove previews for everyone
-                  </button>
-                </div>
-              ) : null}
-            </div>
+            <AttachmentGroup
+              className="max-w-full flex-wrap overflow-visible pb-0"
+              data-link-preview-list=""
+            >
+              {resolvedLinkPreviews.map((preview) => (
+                <LinkPreviewAttachment
+                  key={preview.href}
+                  onRemove={
+                    onRemoveLinkPreviewsForEveryone
+                      ? () => setRemovePreviewDialogOpen(true)
+                      : undefined
+                  }
+                  preview={preview}
+                />
+              ))}
+            </AttachmentGroup>
           ) : null}
           {onRemoveLinkPreviewsForEveryone ? (
             <AlertDialog
@@ -2026,12 +2023,18 @@ function MarkdownInner({
               <AlertDialogContent>
                 <AlertDialogHeader>
                   <AlertDialogTitle>
-                    Remove previews for everyone?
+                    Remove {previewNoun} for everyone?
                   </AlertDialogTitle>
                   <AlertDialogDescription>
-                    This permanently removes all generated link previews from
-                    this message for supporting clients. The links stay in the
-                    message. This can't be undone.
+                    No one will see{" "}
+                    {resolvedLinkPreviews.length === 1
+                      ? "the preview"
+                      : "the previews"}{" "}
+                    on this message anymore.{" "}
+                    {resolvedLinkPreviews.length === 1
+                      ? "The link itself will stay"
+                      : "The links themselves will stay"}{" "}
+                    in the message. This can't be undone.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -2051,7 +2054,7 @@ function MarkdownInner({
                       type="button"
                       variant="destructive"
                     >
-                      Remove previews
+                      Remove {previewNoun}
                     </Button>
                   </AlertDialogAction>
                 </AlertDialogFooter>

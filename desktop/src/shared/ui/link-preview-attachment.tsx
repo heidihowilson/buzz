@@ -1,10 +1,9 @@
-import { ExternalLink, Globe } from "lucide-react";
+import { Globe, X } from "lucide-react";
 
 import type { SupportedLinkPreview } from "@/shared/lib/linkPreview";
 import { cn } from "@/shared/lib/cn";
 import {
   Attachment,
-  AttachmentActions,
   AttachmentContent,
   AttachmentMedia,
   AttachmentTitle,
@@ -113,65 +112,71 @@ function LinkPreviewLogo({ preview }: { preview: SupportedLinkPreview }) {
 
 export function LinkPreviewAttachment({
   className,
+  onRemove,
   preview,
 }: {
   className?: string;
+  onRemove?: () => void;
   preview: SupportedLinkPreview;
 }) {
   const showImage = Boolean(preview.imageDataUrl && preview.imageDomain);
 
   return (
-    <Attachment
-      className={cn(
-        "w-80 max-w-full shrink-0 no-underline shadow-none",
-        className,
-      )}
-      data-link-preview={preview.kind}
-      orientation={showImage ? "vertical" : "horizontal"}
-    >
-      {showImage ? (
-        <div className="relative -mx-3 -mt-2.5 w-[calc(100%+1.5rem)] overflow-hidden border-b border-border/70 bg-muted">
-          <img
-            alt={`Automatic preview from ${preview.imageDomain}`}
-            className="aspect-[1.91/1] w-full object-cover"
-            src={preview.imageDataUrl ?? undefined}
-          />
-          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 pb-2 pt-6 text-2xs text-white">
-            Automatic preview from {preview.imageDomain}
+    <div className={cn("relative w-80 max-w-full shrink-0", className)}>
+      <Attachment
+        className="w-full no-underline shadow-none"
+        data-link-preview={preview.kind}
+        orientation={showImage ? "vertical" : "horizontal"}
+      >
+        {showImage ? (
+          <div className="relative -mx-3 -mt-2.5 w-[calc(100%+1.5rem)] overflow-hidden border-b border-border/70 bg-muted">
+            <img
+              alt={`Automatic preview from ${preview.imageDomain}`}
+              className="aspect-[1.91/1] w-full object-cover"
+              src={preview.imageDataUrl ?? undefined}
+            />
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 pb-2 pt-6 text-2xs text-white">
+              Automatic preview from {preview.imageDomain}
+            </div>
           </div>
-        </div>
-      ) : null}
-      {!showImage ? (
-        <AttachmentMedia className="link-preview-media">
-          <LinkPreviewLogo preview={preview} />
-        </AttachmentMedia>
-      ) : null}
-      <AttachmentContent className={showImage ? "w-full" : undefined}>
-        <div className="truncate text-xs font-medium leading-4 text-muted-foreground">
-          {preview.provider}
-          <span aria-hidden="true"> · </span>
-          {preview.typeLabel}
-        </div>
-        <AttachmentTitle>{preview.title}</AttachmentTitle>
-      </AttachmentContent>
-      <AttachmentActions>
-        <ExternalLink
-          aria-hidden="true"
-          className="h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover/attachment:opacity-100 group-focus-within/attachment:opacity-100"
-        />
-      </AttachmentActions>
-      <AttachmentTrigger asChild>
-        <a
-          aria-label={`Open ${preview.provider} ${preview.typeLabel}: ${preview.title}`}
-          href={preview.href}
-          rel="noreferrer"
-          target="_blank"
+        ) : null}
+        {!showImage ? (
+          <AttachmentMedia className="link-preview-media">
+            <LinkPreviewLogo preview={preview} />
+          </AttachmentMedia>
+        ) : null}
+        <AttachmentContent className={showImage ? "w-full" : undefined}>
+          <div className="truncate text-xs font-medium leading-4 text-muted-foreground">
+            {preview.provider}
+            <span aria-hidden="true"> · </span>
+            {preview.typeLabel}
+          </div>
+          <AttachmentTitle>{preview.title}</AttachmentTitle>
+        </AttachmentContent>
+        <AttachmentTrigger asChild>
+          <a
+            aria-label={`Open ${preview.provider} ${preview.typeLabel}: ${preview.title}`}
+            href={preview.href}
+            rel="noreferrer"
+            target="_blank"
+          >
+            <span className="sr-only">
+              Open {preview.provider} {preview.typeLabel}: {preview.title}
+            </span>
+          </a>
+        </AttachmentTrigger>
+      </Attachment>
+      {onRemove ? (
+        <button
+          aria-label="Remove previews for everyone"
+          className="absolute left-full top-0 z-20 ml-1 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-destructive focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring group-hover/message:opacity-100"
+          onClick={onRemove}
+          title="Remove previews for everyone"
+          type="button"
         >
-          <span className="sr-only">
-            Open {preview.provider} {preview.typeLabel}: {preview.title}
-          </span>
-        </a>
-      </AttachmentTrigger>
-    </Attachment>
+          <X aria-hidden="true" className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
+    </div>
   );
 }
