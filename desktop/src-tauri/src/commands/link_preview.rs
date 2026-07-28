@@ -5,7 +5,7 @@ use image::ImageDecoder;
 
 use futures_util::StreamExt;
 use reqwest::{
-    header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, LOCATION, USER_AGENT},
+    header::{ACCEPT, CONTENT_TYPE, LOCATION, USER_AGENT},
     redirect::Policy,
 };
 use serde::Serialize;
@@ -71,14 +71,7 @@ async fn fetch_link_preview_metadata_inner(
         if !response.status().is_success() || !is_html_response(&response) {
             return Ok(None);
         }
-        if response
-            .content_length()
-            .is_some_and(|size| size > MAX_PREVIEW_FETCH_BYTES as u64)
-        {
-            return Ok(None);
-        }
-
-        let body = read_limited_bytes(response, MAX_PREVIEW_FETCH_BYTES).await?;
+        let body = read_bytes_prefix(response, MAX_PREVIEW_FETCH_BYTES).await?;
         let body = String::from_utf8_lossy(&body);
         let Some(mut metadata) = extract_link_preview_metadata(&body) else {
             return Ok(None);
@@ -165,12 +158,21 @@ fn is_html_response(response: &reqwest::Response) -> bool {
                 || mime.eq_ignore_ascii_case("application/xhtml+xml")
         })
         .unwrap_or(false)
-        && response
-            .headers()
-            .get(CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-            .is_none_or(|size| size <= MAX_PREVIEW_FETCH_BYTES)
+}
+
+async fn read_bytes_prefix(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::with_capacity(limit);
+
+    while bytes.len() < limit {
+        let Some(chunk) = stream.next().await else {
+            break;
+        };
+        let chunk = chunk.map_err(|error| format!("reading link preview failed: {error}"))?;
+        let remaining = limit - bytes.len();
+        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+    }
+    Ok(bytes)
 }
 
 async fn read_limited_bytes(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
@@ -456,12 +458,26 @@ fn decode_html_entities(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        declares_animation, extract_image_url, extract_link_preview_metadata, sanitize_image,
-        LinkPreviewMetadata,
+        declares_animation, extract_image_url, extract_link_preview_metadata, is_html_response,
+        read_bytes_prefix, sanitize_image, LinkPreviewMetadata,
     };
+    use axum::{body::Body, http::Response, routing::get, Router};
+    use bytes::Bytes;
+    use futures_util::stream;
     use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
-    use std::io::Cursor;
+    use std::{convert::Infallible, io::Cursor};
     use url::Url;
+
+    async fn test_response(router: Router, path: &str) -> reqwest::Response {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        reqwest::get(format!("http://{address}{path}"))
+            .await
+            .unwrap()
+    }
 
     #[test]
     fn metadata_prefers_open_graph_and_reads_site_name() {
@@ -501,6 +517,76 @@ mod tests {
         assert_eq!(
             extract_image_url(html, &page).unwrap().as_str(),
             "https://example.com/preview.png"
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_html_uses_metadata_within_the_bounded_prefix() {
+        const LIMIT: usize = 256;
+        let metadata = r#"<meta property="og:title" content="Prefix title"><meta property="og:image" content="https://example.com/preview.png">"#;
+        let body = format!("{metadata}{}", "x".repeat(LIMIT));
+        let response = test_response(
+            Router::new().route(
+                "/declared",
+                get(move || {
+                    let body = body.clone();
+                    async move {
+                        Response::builder()
+                            .header("content-type", "text/html")
+                            .body(Body::from(body))
+                            .unwrap()
+                    }
+                }),
+            ),
+            "/declared",
+        )
+        .await;
+        assert!(response
+            .content_length()
+            .is_some_and(|size| size > LIMIT as u64));
+        assert!(is_html_response(&response));
+
+        let prefix = read_bytes_prefix(response, LIMIT).await.unwrap();
+        assert_eq!(prefix.len(), LIMIT);
+        let html = String::from_utf8_lossy(&prefix);
+        assert_eq!(
+            extract_link_preview_metadata(&html).map(|metadata| metadata.title),
+            Some("Prefix title".to_string())
+        );
+        assert!(extract_image_url(&html, &Url::parse("https://example.com").unwrap()).is_some());
+    }
+
+    #[tokio::test]
+    async fn oversized_chunked_html_ignores_metadata_beyond_the_bounded_prefix() {
+        const LIMIT: usize = 256;
+        let response = test_response(
+            Router::new().route(
+                "/chunked",
+                get(|| async {
+                    let chunks = stream::iter([
+                        Ok::<_, Infallible>(Bytes::from(vec![b'x'; LIMIT])),
+                        Ok(Bytes::from_static(
+                            br#"<meta property="og:title" content="Too late"><meta property="og:image" content="https://example.com/late.png">"#,
+                        )),
+                    ]);
+                    Response::builder()
+                        .header("content-type", "text/html")
+                        .body(Body::from_stream(chunks))
+                        .unwrap()
+                }),
+            ),
+            "/chunked",
+        )
+        .await;
+        assert_eq!(response.content_length(), None);
+
+        let prefix = read_bytes_prefix(response, LIMIT).await.unwrap();
+        assert_eq!(prefix.len(), LIMIT);
+        let html = String::from_utf8_lossy(&prefix);
+        assert_eq!(extract_link_preview_metadata(&html), None);
+        assert_eq!(
+            extract_image_url(&html, &Url::parse("https://example.com").unwrap()),
+            None
         );
     }
 
