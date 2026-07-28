@@ -131,13 +131,10 @@ export function LinkPreviewAttachment({
         {showImage ? (
           <div className="relative -mx-3 -mt-2.5 w-[calc(100%+1.5rem)] overflow-hidden border-b border-border/70 bg-muted">
             <img
-              alt={`Automatic preview from ${preview.imageDomain}`}
+              alt={`Preview from ${preview.imageDomain}`}
               className="aspect-[1.91/1] w-full object-cover"
               src={preview.imageDataUrl ?? undefined}
             />
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 pb-2 pt-6 text-2xs text-white">
-              Automatic preview from {preview.imageDomain}
-            </div>
           </div>
         ) : null}
         {!showImage ? (
@@ -148,8 +145,6 @@ export function LinkPreviewAttachment({
         <AttachmentContent className={showImage ? "w-full" : undefined}>
           <div className="truncate text-xs font-medium leading-4 text-muted-foreground">
             {preview.provider}
-            <span aria-hidden="true"> · </span>
-            {preview.typeLabel}
           </div>
           <AttachmentTitle>{preview.title}</AttachmentTitle>
         </AttachmentContent>
