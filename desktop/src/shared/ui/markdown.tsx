@@ -33,10 +33,6 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { AttachmentGroup } from "@/shared/ui/attachment";
 import { ConfigNudgeCard } from "@/shared/ui/config-nudge-attachment";
 import { LinkPreviewAttachment } from "@/shared/ui/link-preview-attachment";
-import {
-  isLinkPreviewDismissed,
-  setLinkPreviewDismissed,
-} from "@/shared/lib/linkPreviewVisibility";
 import { Button } from "@/shared/ui/button";
 import {
   AlertDialog,
@@ -1886,24 +1882,19 @@ function MarkdownInner({
     },
     [goChannel],
   );
-  const [previewsDismissed, setPreviewsDismissed] = React.useState(() =>
-    messageId ? isLinkPreviewDismissed(messageId) : false,
-  );
   const [removePreviewDialogOpen, setRemovePreviewDialogOpen] =
     React.useState(false);
-  const [removedForEveryone, setRemovedForEveryone] = React.useState(false);
-  React.useEffect(() => {
-    setPreviewsDismissed(messageId ? isLinkPreviewDismissed(messageId) : false);
-    setRemovedForEveryone(false);
-  }, [messageId]);
+  const [removedPreviewMessageId, setRemovedPreviewMessageId] = React.useState<
+    string | null
+  >(null);
   const previewsGloballySuppressed =
-    linkPreviewsSuppressed || removedForEveryone;
+    linkPreviewsSuppressed || removedPreviewMessageId === messageId;
   const linkPreviews = React.useMemo(
     () =>
-      interactive && !previewsGloballySuppressed && !previewsDismissed
+      interactive && !previewsGloballySuppressed
         ? extractSupportedLinkPreviews(content)
         : [],
-    [content, interactive, previewsGloballySuppressed, previewsDismissed],
+    [content, interactive, previewsGloballySuppressed],
   );
   const configNudge = React.useMemo(
     () => computeConfigNudge(content, interactive, configNudgeAuthorPubkey),
@@ -2014,41 +2005,18 @@ function MarkdownInner({
                   <LinkPreviewAttachment key={preview.href} preview={preview} />
                 ))}
               </AttachmentGroup>
-              {messageId ? (
-                <div className="flex flex-wrap gap-2 text-2xs text-muted-foreground">
+              {onRemoveLinkPreviewsForEveryone ? (
+                <div className="text-2xs text-muted-foreground">
                   <button
-                    className="hover:text-foreground hover:underline"
-                    onClick={() => {
-                      setLinkPreviewDismissed(messageId, true);
-                      setPreviewsDismissed(true);
-                    }}
+                    className="hover:text-destructive hover:underline"
+                    onClick={() => setRemovePreviewDialogOpen(true)}
                     type="button"
                   >
-                    Dismiss previews for me
+                    Remove previews for everyone
                   </button>
-                  {onRemoveLinkPreviewsForEveryone ? (
-                    <button
-                      className="hover:text-destructive hover:underline"
-                      onClick={() => setRemovePreviewDialogOpen(true)}
-                      type="button"
-                    >
-                      Remove previews for everyone
-                    </button>
-                  ) : null}
                 </div>
               ) : null}
             </div>
-          ) : previewsDismissed && messageId && !previewsGloballySuppressed ? (
-            <button
-              className="text-2xs text-muted-foreground hover:text-foreground hover:underline"
-              onClick={() => {
-                setLinkPreviewDismissed(messageId, false);
-                setPreviewsDismissed(false);
-              }}
-              type="button"
-            >
-              Show dismissed link previews
-            </button>
           ) : null}
           {onRemoveLinkPreviewsForEveryone ? (
             <AlertDialog
@@ -2075,9 +2043,9 @@ function MarkdownInner({
                   <AlertDialogAction asChild>
                     <Button
                       onClick={() => {
-                        setRemovedForEveryone(true);
+                        setRemovedPreviewMessageId(messageId ?? null);
                         void onRemoveLinkPreviewsForEveryone().catch(() => {
-                          setRemovedForEveryone(false);
+                          setRemovedPreviewMessageId(null);
                         });
                       }}
                       type="button"
