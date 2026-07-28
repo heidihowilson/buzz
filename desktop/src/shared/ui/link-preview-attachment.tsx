@@ -2,6 +2,7 @@ import { Globe, X } from "lucide-react";
 
 import type { SupportedLinkPreview } from "@/shared/lib/linkPreview";
 import { cn } from "@/shared/lib/cn";
+import { Button } from "@/shared/ui/button";
 import {
   Attachment,
   AttachmentContent,
@@ -162,15 +163,17 @@ export function LinkPreviewAttachment({
         </AttachmentTrigger>
       </Attachment>
       {onRemove ? (
-        <button
+        <Button
           aria-label="Remove previews for everyone"
-          className="absolute left-full top-0 z-20 ml-1 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-destructive focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring group-hover/message:opacity-100"
+          className="absolute left-full top-0 z-20 ml-1 h-5 w-5 rounded-full text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover/message:opacity-100"
           onClick={onRemove}
+          size="icon-xs"
           title="Remove previews for everyone"
           type="button"
+          variant="ghost"
         >
-          <X aria-hidden="true" className="h-3.5 w-3.5" />
-        </button>
+          <X aria-hidden="true" />
+        </Button>
       ) : null}
     </div>
   );
