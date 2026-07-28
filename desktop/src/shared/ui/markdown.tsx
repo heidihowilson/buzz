@@ -33,6 +33,21 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { AttachmentGroup } from "@/shared/ui/attachment";
 import { ConfigNudgeCard } from "@/shared/ui/config-nudge-attachment";
 import { LinkPreviewAttachment } from "@/shared/ui/link-preview-attachment";
+import {
+  isLinkPreviewDismissed,
+  setLinkPreviewDismissed,
+} from "@/shared/lib/linkPreviewVisibility";
+import { Button } from "@/shared/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
 import {
   computeConfigNudge,
@@ -1838,6 +1853,8 @@ function MarkdownInner({
   agentMentionPubkeysByName,
   mediaInset = false,
   messageId,
+  linkPreviewsSuppressed = false,
+  onRemoveLinkPreviewsForEveryone,
   mentionNames,
   mentionPubkeysByName,
   searchQuery,
@@ -1869,9 +1886,24 @@ function MarkdownInner({
     },
     [goChannel],
   );
+  const [previewsDismissed, setPreviewsDismissed] = React.useState(() =>
+    messageId ? isLinkPreviewDismissed(messageId) : false,
+  );
+  const [removePreviewDialogOpen, setRemovePreviewDialogOpen] =
+    React.useState(false);
+  const [removedForEveryone, setRemovedForEveryone] = React.useState(false);
+  React.useEffect(() => {
+    setPreviewsDismissed(messageId ? isLinkPreviewDismissed(messageId) : false);
+    setRemovedForEveryone(false);
+  }, [messageId]);
+  const previewsGloballySuppressed =
+    linkPreviewsSuppressed || removedForEveryone;
   const linkPreviews = React.useMemo(
-    () => (interactive ? extractSupportedLinkPreviews(content) : []),
-    [content, interactive],
+    () =>
+      interactive && !previewsGloballySuppressed && !previewsDismissed
+        ? extractSupportedLinkPreviews(content)
+        : [],
+    [content, interactive, previewsGloballySuppressed, previewsDismissed],
   );
   const configNudge = React.useMemo(
     () => computeConfigNudge(content, interactive, configNudgeAuthorPubkey),
@@ -1973,18 +2005,90 @@ function MarkdownInner({
             </AttachmentGroup>
           ) : null}
           {resolvedLinkPreviews.length > 0 ? (
-            <AttachmentGroup
-              className="max-w-full flex-wrap overflow-visible pb-0"
-              data-link-preview-list=""
+            <div className="space-y-1.5" data-link-preview-container="">
+              <AttachmentGroup
+                className="max-w-full flex-wrap overflow-visible pb-0"
+                data-link-preview-list=""
+              >
+                {resolvedLinkPreviews.map((preview) => (
+                  <LinkPreviewAttachment key={preview.href} preview={preview} />
+                ))}
+              </AttachmentGroup>
+              {messageId ? (
+                <div className="flex flex-wrap gap-2 text-2xs text-muted-foreground">
+                  <button
+                    className="hover:text-foreground hover:underline"
+                    onClick={() => {
+                      setLinkPreviewDismissed(messageId, true);
+                      setPreviewsDismissed(true);
+                    }}
+                    type="button"
+                  >
+                    Dismiss previews for me
+                  </button>
+                  {onRemoveLinkPreviewsForEveryone ? (
+                    <button
+                      className="hover:text-destructive hover:underline"
+                      onClick={() => setRemovePreviewDialogOpen(true)}
+                      type="button"
+                    >
+                      Remove previews for everyone
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : previewsDismissed && messageId && !previewsGloballySuppressed ? (
+            <button
+              className="text-2xs text-muted-foreground hover:text-foreground hover:underline"
+              onClick={() => {
+                setLinkPreviewDismissed(messageId, false);
+                setPreviewsDismissed(false);
+              }}
+              type="button"
             >
-              {resolvedLinkPreviews.map((preview) => (
-                <LinkPreviewAttachment
-                  key={preview.href}
-                  messageId={messageId}
-                  preview={preview}
-                />
-              ))}
-            </AttachmentGroup>
+              Show dismissed link previews
+            </button>
+          ) : null}
+          {onRemoveLinkPreviewsForEveryone ? (
+            <AlertDialog
+              onOpenChange={setRemovePreviewDialogOpen}
+              open={removePreviewDialogOpen}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    Remove previews for everyone?
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This permanently removes all generated link previews from
+                    this message for supporting clients. The links stay in the
+                    message. This can't be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel asChild>
+                    <Button type="button" variant="outline">
+                      Cancel
+                    </Button>
+                  </AlertDialogCancel>
+                  <AlertDialogAction asChild>
+                    <Button
+                      onClick={() => {
+                        setRemovedForEveryone(true);
+                        void onRemoveLinkPreviewsForEveryone().catch(() => {
+                          setRemovedForEveryone(false);
+                        });
+                      }}
+                      type="button"
+                      variant="destructive"
+                    >
+                      Remove previews
+                    </Button>
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           ) : null}
         </VideoReviewMarkdownContext.Provider>
       </MarkdownRuntimeContext.Provider>
@@ -2001,6 +2105,9 @@ export const Markdown = React.memo(
     prev.interactive === next.interactive &&
     prev.mediaInset === next.mediaInset &&
     prev.messageId === next.messageId &&
+    prev.linkPreviewsSuppressed === next.linkPreviewsSuppressed &&
+    prev.onRemoveLinkPreviewsForEveryone ===
+      next.onRemoveLinkPreviewsForEveryone &&
     shallowRecordEqual(
       prev.agentMentionPubkeysByName,
       next.agentMentionPubkeysByName,

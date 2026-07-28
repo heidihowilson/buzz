@@ -41,6 +41,9 @@ import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 import type { VideoReviewContext } from "@/shared/ui/VideoPlayer";
 import { MessageActionBar } from "./MessageActionBar";
+import { editMessage } from "@/shared/api/tauri";
+import { hasLinkPreviewSuppression } from "@/features/messages/lib/formatTimelineMessages";
+import { toast } from "sonner";
 import { MessageAgentOwner } from "./MessageAgentOwner";
 import { MessageAuthorText, MessageHeaderRow } from "./MessageHeader";
 import { MessageTimestamp } from "./MessageTimestamp";
@@ -149,6 +152,29 @@ export const MessageRow = React.memo(
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
+    const linkPreviewsSuppressed = hasLinkPreviewSuppression(message.tags);
+    const removeLinkPreviewsForEveryone =
+      channelId && onEdit && !message.pending && !linkPreviewsSuppressed
+        ? async () => {
+            const tags = message.tags ?? [];
+            try {
+              await editMessage(
+                channelId,
+                message.id,
+                message.body,
+                tags.filter((tag) => tag[0] === "imeta"),
+                tags.filter((tag) => tag[0] === "emoji"),
+                undefined,
+                true,
+              );
+            } catch (error) {
+              toast.error(
+                `Failed to remove previews: ${error instanceof Error ? error.message : String(error)}`,
+              );
+              throw error;
+            }
+          }
+        : undefined;
     const [badgeBurstEmoji, setBadgeBurstEmoji] = React.useState<string | null>(
       null,
     );
@@ -371,6 +397,8 @@ export const MessageRow = React.memo(
               )}
               content={message.body}
               messageId={message.id}
+              linkPreviewsSuppressed={linkPreviewsSuppressed}
+              onRemoveLinkPreviewsForEveryone={removeLinkPreviewsForEveryone}
               customEmoji={customEmoji}
               imetaByUrl={imetaByUrl}
               agentMentionPubkeysByName={agentMentionPubkeysByName}

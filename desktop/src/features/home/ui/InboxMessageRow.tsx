@@ -16,6 +16,7 @@ import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Markdown } from "@/shared/ui/markdown";
+import { hasLinkPreviewSuppression } from "@/features/messages/lib/formatTimelineMessages";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 export type InboxDisplayMessage = InboxContextMessage & {
@@ -213,6 +214,9 @@ export function InboxMessageRow({
               )}
               content={message.content}
               messageId={message.id}
+              linkPreviewsSuppressed={hasLinkPreviewSuppression(
+                timelineMessage.tags,
+              )}
               customEmoji={customEmoji}
               mentionNames={message.mentionNames}
               mentionPubkeysByName={message.mentionPubkeysByName}

@@ -61,6 +61,8 @@ export type MarkdownProps = {
   mediaInset?: boolean;
   /** Event/message identity used only for local preview-image visibility. */
   messageId?: string;
+  linkPreviewsSuppressed?: boolean;
+  onRemoveLinkPreviewsForEveryone?: () => Promise<void>;
   searchQuery?: string;
   /** Display name shown in shared-agent card metadata. */
   snapshotSharedBy?: string;

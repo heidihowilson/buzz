@@ -20,6 +20,7 @@ import {
 import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
+import { hasLinkPreviewSuppression } from "@/features/messages/lib/formatTimelineMessages";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const relativeTimeFormatter = new Intl.RelativeTimeFormat("en-US", {
@@ -229,6 +230,9 @@ export function FeedSection({
                     className="max-w-none text-sm leading-snug text-muted-foreground"
                     content={feedContent(item)}
                     messageId={item.id}
+                    linkPreviewsSuppressed={hasLinkPreviewSuppression(
+                      item.tags,
+                    )}
                     mentionNames={mentionNames}
                     mentionPubkeysByName={mentionPubkeysByName}
                   />

@@ -11,6 +11,7 @@ import type { ForumPost } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
+import { hasLinkPreviewSuppression } from "@/features/messages/lib/formatTimelineMessages";
 import { parseImetaTags } from "@/shared/ui/markdown/parseImeta";
 
 import { formatRelativeTime } from "../lib/time";
@@ -122,6 +123,7 @@ export function ForumPostCard({
           className="text-sm"
           content={previewContent}
           messageId={post.eventId}
+          linkPreviewsSuppressed={hasLinkPreviewSuppression(post.tags)}
           imetaByUrl={imetaByUrl}
           mentionNames={mentionNames}
           mentionPubkeysByName={mentionPubkeysByName}

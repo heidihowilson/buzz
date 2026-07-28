@@ -3,7 +3,10 @@ use tauri::{AppHandle, State};
 
 mod forum;
 
-use forum::{forum_message_from_event, forum_reply_from_event};
+use forum::{
+    apply_link_preview_suppression, fetch_agent_owner_pubkeys, forum_message_from_event,
+    forum_reply_from_event, link_preview_suppression_targets,
+};
 
 use crate::{
     app_state::AppState,
@@ -113,9 +116,30 @@ pub async fn get_feed(
         Vec::new()
     };
 
+    let mention_ids = mention_events
+        .iter()
+        .map(|event| event.id.to_hex())
+        .collect::<Vec<_>>();
+    let mention_edits = if mention_ids.is_empty() {
+        Vec::new()
+    } else {
+        query_relay(
+            &state,
+            &[serde_json::json!({ "kinds": [40003], "#e": mention_ids })],
+        )
+        .await
+        .unwrap_or_default()
+    };
+    let mention_owner_pubkeys = fetch_agent_owner_pubkeys(&state, &mention_events).await;
+    let suppressed_mentions =
+        link_preview_suppression_targets(&mention_events, &mention_edits, &mention_owner_pubkeys);
     let mentions: Vec<FeedItemInfo> = mention_events
         .iter()
-        .map(|ev| feed_item_from_event(ev, "mentions"))
+        .map(|ev| {
+            let mut item = feed_item_from_event(ev, "mentions");
+            apply_link_preview_suppression(&mut item.tags, &item.id, &suppressed_mentions);
+            item
+        })
         .collect();
     let needs_action: Vec<FeedItemInfo> = approval_events
         .iter()
@@ -223,9 +247,29 @@ pub async fn get_forum_posts(
     }
 
     let events = query_relay(&state, &[serde_json::Value::Object(filter)]).await?;
+    let ids = events
+        .iter()
+        .map(|event| event.id.to_hex())
+        .collect::<Vec<_>>();
+    let edits = if ids.is_empty() {
+        Vec::new()
+    } else {
+        query_relay(
+            &state,
+            &[serde_json::json!({ "kinds": [40003], "#e": ids })],
+        )
+        .await
+        .unwrap_or_default()
+    };
+    let owner_pubkeys = fetch_agent_owner_pubkeys(&state, &events).await;
+    let suppressed = link_preview_suppression_targets(&events, &edits, &owner_pubkeys);
     let messages: Vec<ForumMessageInfo> = events
         .iter()
-        .map(|ev| forum_message_from_event(ev, &channel_id))
+        .map(|ev| {
+            let mut message = forum_message_from_event(ev, &channel_id);
+            apply_link_preview_suppression(&mut message.tags, &message.event_id, &suppressed);
+            message
+        })
         .collect();
 
     let next_cursor = messages.last().map(|m| m.created_at);
@@ -258,14 +302,34 @@ pub async fn get_forum_thread(
         ],
     )
     .await?;
+    let ids = events
+        .iter()
+        .map(|event| event.id.to_hex())
+        .collect::<Vec<_>>();
+    let edits = if ids.is_empty() {
+        Vec::new()
+    } else {
+        query_relay(
+            &state,
+            &[serde_json::json!({ "kinds": [40003], "#e": ids })],
+        )
+        .await
+        .unwrap_or_default()
+    };
+    let owner_pubkeys = fetch_agent_owner_pubkeys(&state, &events).await;
+    let suppressed = link_preview_suppression_targets(&events, &edits, &owner_pubkeys);
 
     let mut root: Option<ForumMessageInfo> = None;
     let mut replies: Vec<ForumThreadReplyInfo> = Vec::new();
     for ev in &events {
         if ev.id.to_hex() == event_id {
-            root = Some(forum_message_from_event(ev, &channel_id));
-        } else {
-            replies.push(forum_reply_from_event(ev, &channel_id, &event_id));
+            let mut message = forum_message_from_event(ev, &channel_id);
+            apply_link_preview_suppression(&mut message.tags, &message.event_id, &suppressed);
+            root = Some(message);
+        } else if ev.kind.as_u16() as u32 != 40003 {
+            let mut reply = forum_reply_from_event(ev, &channel_id, &event_id);
+            apply_link_preview_suppression(&mut reply.tags, &reply.event_id, &suppressed);
+            replies.push(reply);
         }
     }
     let total_replies = replies.len() as u32;
@@ -930,6 +994,7 @@ pub async fn edit_message(
     // edited body against the original). Only these get a `p` tag, so a typo-fix
     // edit that leaves the mention set unchanged never re-wakes anyone.
     mention_pubkeys: Option<Vec<String>>,
+    suppress_link_previews: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let channel_uuid = uuid::Uuid::parse_str(&channel_id)
@@ -951,6 +1016,7 @@ pub async fn edit_message(
         &media_tags,
         &emoji,
         &mention_refs,
+        suppress_link_previews.unwrap_or(false),
     )?;
     submit_event(builder, &state).await?;
     Ok(())

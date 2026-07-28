@@ -1,14 +1,7 @@
-import * as React from "react";
-import { ExternalLink, Globe, EyeOff } from "lucide-react";
+import { ExternalLink, Globe } from "lucide-react";
 
 import type { SupportedLinkPreview } from "@/shared/lib/linkPreview";
 import { cn } from "@/shared/lib/cn";
-import {
-  hidePreviewImage,
-  linkPreviewImageKey,
-  readHiddenPreviewImages,
-} from "@/shared/lib/linkPreviewImageVisibility";
-import { Button } from "@/shared/ui/button";
 import {
   Attachment,
   AttachmentActions,
@@ -120,31 +113,12 @@ function LinkPreviewLogo({ preview }: { preview: SupportedLinkPreview }) {
 
 export function LinkPreviewAttachment({
   className,
-  messageId,
   preview,
 }: {
   className?: string;
-  messageId?: string;
   preview: SupportedLinkPreview;
 }) {
-  const visibilityKey = messageId
-    ? linkPreviewImageKey(messageId, preview.href)
-    : null;
-  const [imageHidden, setImageHidden] = React.useState(() =>
-    visibilityKey
-      ? readHiddenPreviewImages().some((entry) => entry.key === visibilityKey)
-      : false,
-  );
-  React.useEffect(() => {
-    setImageHidden(
-      visibilityKey
-        ? readHiddenPreviewImages().some((entry) => entry.key === visibilityKey)
-        : false,
-    );
-  }, [visibilityKey]);
-  const showImage = Boolean(
-    messageId && preview.imageDataUrl && preview.imageDomain && !imageHidden,
-  );
+  const showImage = Boolean(preview.imageDataUrl && preview.imageDomain);
 
   return (
     <Attachment
@@ -162,19 +136,6 @@ export function LinkPreviewAttachment({
             className="aspect-[1.91/1] w-full object-cover"
             src={preview.imageDataUrl ?? undefined}
           />
-          <Button
-            aria-label={`Hide automatic preview image from ${preview.imageDomain}`}
-            className="absolute right-2 top-2 z-20 bg-background/90 shadow-sm"
-            onClick={() => {
-              if (visibilityKey) hidePreviewImage(visibilityKey);
-              setImageHidden(true);
-            }}
-            size="icon-xs"
-            title="Hide preview image"
-            variant="secondary"
-          >
-            <EyeOff aria-hidden="true" className="h-3.5 w-3.5" />
-          </Button>
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 pb-2 pt-6 text-2xs text-white">
             Automatic preview from {preview.imageDomain}
           </div>
