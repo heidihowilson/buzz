@@ -121,6 +121,7 @@ export function ForumPostCard({
         <Markdown
           className="text-sm"
           content={previewContent}
+          messageId={post.eventId}
           imetaByUrl={imetaByUrl}
           mentionNames={mentionNames}
           mentionPubkeysByName={mentionPubkeysByName}

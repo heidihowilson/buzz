@@ -115,6 +115,7 @@ function ReplyRow({
           channelNames={channelNames}
           className="text-sm"
           content={reply.content}
+          messageId={reply.eventId}
           imetaByUrl={parseImetaTags(reply.tags)}
           mentionNames={replyMentionNames}
           mentionPubkeysByName={replyMentionPubkeysByName}
@@ -258,6 +259,7 @@ export function ForumThreadPanel({
               channelNames={channelNames}
               className="text-sm"
               content={post.content}
+              messageId={post.eventId}
               imetaByUrl={parseImetaTags(post.tags)}
               mentionNames={postMentionNames}
               mentionPubkeysByName={postMentionPubkeysByName}

@@ -1837,6 +1837,7 @@ function MarkdownInner({
   interactive = true,
   agentMentionPubkeysByName,
   mediaInset = false,
+  messageId,
   mentionNames,
   mentionPubkeysByName,
   searchQuery,
@@ -1977,7 +1978,11 @@ function MarkdownInner({
               data-link-preview-list=""
             >
               {resolvedLinkPreviews.map((preview) => (
-                <LinkPreviewAttachment key={preview.href} preview={preview} />
+                <LinkPreviewAttachment
+                  key={preview.href}
+                  messageId={messageId}
+                  preview={preview}
+                />
               ))}
             </AttachmentGroup>
           ) : null}
@@ -1995,6 +2000,7 @@ export const Markdown = React.memo(
     prev.customEmoji === next.customEmoji &&
     prev.interactive === next.interactive &&
     prev.mediaInset === next.mediaInset &&
+    prev.messageId === next.messageId &&
     shallowRecordEqual(
       prev.agentMentionPubkeysByName,
       next.agentMentionPubkeysByName,

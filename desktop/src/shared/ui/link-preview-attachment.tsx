@@ -1,7 +1,14 @@
-import { ExternalLink, Globe } from "lucide-react";
+import * as React from "react";
+import { ExternalLink, Globe, EyeOff } from "lucide-react";
 
 import type { SupportedLinkPreview } from "@/shared/lib/linkPreview";
 import { cn } from "@/shared/lib/cn";
+import {
+  hidePreviewImage,
+  linkPreviewImageKey,
+  readHiddenPreviewImages,
+} from "@/shared/lib/linkPreviewImageVisibility";
+import { Button } from "@/shared/ui/button";
 import {
   Attachment,
   AttachmentActions,
@@ -113,11 +120,32 @@ function LinkPreviewLogo({ preview }: { preview: SupportedLinkPreview }) {
 
 export function LinkPreviewAttachment({
   className,
+  messageId,
   preview,
 }: {
   className?: string;
+  messageId?: string;
   preview: SupportedLinkPreview;
 }) {
+  const visibilityKey = messageId
+    ? linkPreviewImageKey(messageId, preview.href)
+    : null;
+  const [imageHidden, setImageHidden] = React.useState(() =>
+    visibilityKey
+      ? readHiddenPreviewImages().some((entry) => entry.key === visibilityKey)
+      : false,
+  );
+  React.useEffect(() => {
+    setImageHidden(
+      visibilityKey
+        ? readHiddenPreviewImages().some((entry) => entry.key === visibilityKey)
+        : false,
+    );
+  }, [visibilityKey]);
+  const showImage = Boolean(
+    messageId && preview.imageDataUrl && preview.imageDomain && !imageHidden,
+  );
+
   return (
     <Attachment
       className={cn(
@@ -125,11 +153,39 @@ export function LinkPreviewAttachment({
         className,
       )}
       data-link-preview={preview.kind}
+      orientation={showImage ? "vertical" : "horizontal"}
     >
-      <AttachmentMedia className="link-preview-media">
-        <LinkPreviewLogo preview={preview} />
-      </AttachmentMedia>
-      <AttachmentContent>
+      {showImage ? (
+        <div className="relative -mx-3 -mt-2.5 w-[calc(100%+1.5rem)] overflow-hidden border-b border-border/70 bg-muted">
+          <img
+            alt={`Automatic preview from ${preview.imageDomain}`}
+            className="aspect-[1.91/1] w-full object-cover"
+            src={preview.imageDataUrl ?? undefined}
+          />
+          <Button
+            aria-label={`Hide automatic preview image from ${preview.imageDomain}`}
+            className="absolute right-2 top-2 z-20 bg-background/90 shadow-sm"
+            onClick={() => {
+              if (visibilityKey) hidePreviewImage(visibilityKey);
+              setImageHidden(true);
+            }}
+            size="icon-xs"
+            title="Hide preview image"
+            variant="secondary"
+          >
+            <EyeOff aria-hidden="true" className="h-3.5 w-3.5" />
+          </Button>
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 pb-2 pt-6 text-2xs text-white">
+            Automatic preview from {preview.imageDomain}
+          </div>
+        </div>
+      ) : null}
+      {!showImage ? (
+        <AttachmentMedia className="link-preview-media">
+          <LinkPreviewLogo preview={preview} />
+        </AttachmentMedia>
+      ) : null}
+      <AttachmentContent className={showImage ? "w-full" : undefined}>
         <div className="truncate text-xs font-medium leading-4 text-muted-foreground">
           {preview.provider}
           <span aria-hidden="true"> · </span>

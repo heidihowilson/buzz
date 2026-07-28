@@ -1,4 +1,7 @@
-use std::{net::IpAddr, time::Duration};
+use std::{io::Cursor, net::IpAddr, time::Duration};
+
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use image::ImageDecoder;
 
 use futures_util::StreamExt;
 use reqwest::{
@@ -9,6 +12,10 @@ use serde::Serialize;
 use url::Url;
 
 const MAX_PREVIEW_FETCH_BYTES: usize = 256 * 1024;
+const MAX_IMAGE_FETCH_BYTES: usize = 2 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION: u32 = 4096;
+const MAX_IMAGE_PIXELS: u64 = 16_000_000;
+const MAX_SANITIZED_DIMENSION: u32 = 1200;
 const PREVIEW_FETCH_TIMEOUT: Duration = Duration::from_secs(4);
 const PREVIEW_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REDIRECTS: usize = 3;
@@ -19,6 +26,8 @@ const MAX_METADATA_CHARS: usize = 180;
 pub struct LinkPreviewMetadata {
     title: String,
     site_name: Option<String>,
+    image_data_url: Option<String>,
+    image_domain: Option<String>,
 }
 
 #[tauri::command]
@@ -40,7 +49,7 @@ async fn fetch_link_preview_metadata_inner(
     validate_public_https_url(&url).await?;
 
     for redirect_count in 0..=MAX_REDIRECTS {
-        let response = send_pinned_request(&url).await?;
+        let response = send_pinned_request(&url, "text/html,application/xhtml+xml;q=0.9").await?;
 
         if response.status().is_redirection() {
             if redirect_count == MAX_REDIRECTS {
@@ -69,8 +78,18 @@ async fn fetch_link_preview_metadata_inner(
             return Ok(None);
         }
 
-        let body = read_limited_text(response).await?;
-        return Ok(extract_link_preview_metadata(&body));
+        let body = read_limited_bytes(response, MAX_PREVIEW_FETCH_BYTES).await?;
+        let body = String::from_utf8_lossy(&body);
+        let Some(mut metadata) = extract_link_preview_metadata(&body) else {
+            return Ok(None);
+        };
+        if let Some(image_url) = extract_image_url(&body, &url) {
+            if let Ok((data_url, domain)) = fetch_sanitized_image(image_url).await {
+                metadata.image_data_url = Some(data_url);
+                metadata.image_domain = Some(domain);
+            }
+        }
+        return Ok(Some(metadata));
     }
 
     Ok(None)
@@ -108,7 +127,7 @@ async fn resolve_public_addresses(host: &str) -> Result<Vec<IpAddr>, String> {
     Ok(addresses)
 }
 
-async fn send_pinned_request(url: &Url) -> Result<reqwest::Response, String> {
+async fn send_pinned_request(url: &Url, accept: &str) -> Result<reqwest::Response, String> {
     let host = url
         .host_str()
         .ok_or_else(|| "link preview URL has no host".to_string())?;
@@ -126,7 +145,7 @@ async fn send_pinned_request(url: &Url) -> Result<reqwest::Response, String> {
         .map_err(|error| format!("link preview client failed: {error}"))?;
     let request = client
         .get(url.as_str())
-        .header(ACCEPT, "text/html,application/xhtml+xml;q=0.9")
+        .header(ACCEPT, accept)
         .header(USER_AGENT, "Buzz Desktop link preview");
 
     tokio::time::timeout(PREVIEW_FETCH_TIMEOUT, request.send())
@@ -154,19 +173,150 @@ fn is_html_response(response: &reqwest::Response) -> bool {
             .is_none_or(|size| size <= MAX_PREVIEW_FETCH_BYTES)
 }
 
-async fn read_limited_text(response: reqwest::Response) -> Result<String, String> {
+async fn read_limited_bytes(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| format!("reading link preview failed: {error}"))?;
-        if bytes.len() + chunk.len() > MAX_PREVIEW_FETCH_BYTES {
+        if bytes.len().saturating_add(chunk.len()) > limit {
             return Err("link preview response exceeded the size limit".to_string());
         }
         bytes.extend_from_slice(&chunk);
     }
+    Ok(bytes)
+}
 
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+fn extract_image_url(html: &str, page_url: &Url) -> Option<Url> {
+    let raw = extract_meta_content(html, "property", "og:image")
+        .or_else(|| extract_meta_content(html, "property", "og:image:secure_url"))
+        .or_else(|| extract_meta_content(html, "name", "twitter:image"))?;
+    page_url.join(raw.trim()).ok()
+}
+
+async fn fetch_sanitized_image(mut url: Url) -> Result<(String, String), String> {
+    validate_public_https_url(&url).await?;
+    for redirect_count in 0..=MAX_REDIRECTS {
+        let response = send_pinned_request(&url, "image/jpeg,image/png,image/webp").await?;
+        if response.status().is_redirection() {
+            if redirect_count == MAX_REDIRECTS {
+                return Err("link preview image redirected too many times".to_string());
+            }
+            let location = response
+                .headers()
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| "link preview image redirect has an invalid location".to_string())?;
+            url = url
+                .join(location)
+                .map_err(|error| format!("invalid link preview image redirect: {error}"))?;
+            validate_public_https_url(&url).await?;
+            continue;
+        }
+        if !response.status().is_success() {
+            return Err("link preview image request was unsuccessful".to_string());
+        }
+        let declared_mime = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase()
+            })
+            .ok_or_else(|| "link preview image has no content type".to_string())?;
+        if !matches!(
+            declared_mime.as_str(),
+            "image/jpeg" | "image/png" | "image/webp"
+        ) {
+            return Err("link preview image type is unsupported".to_string());
+        }
+        if response
+            .content_length()
+            .is_some_and(|size| size > MAX_IMAGE_FETCH_BYTES as u64)
+        {
+            return Err("link preview image exceeded the size limit".to_string());
+        }
+        let bytes = read_limited_bytes(response, MAX_IMAGE_FETCH_BYTES).await?;
+        let data_url = tokio::task::spawn_blocking(move || sanitize_image(&bytes, &declared_mime))
+            .await
+            .map_err(|_| "link preview image sanitizer failed".to_string())??;
+        let domain = url.host_str().unwrap_or_default().to_string();
+        return Ok((data_url, domain));
+    }
+    Err("link preview image fetch failed".to_string())
+}
+
+fn sanitize_image(bytes: &[u8], declared_mime: &str) -> Result<String, String> {
+    let sniffed = infer::get(bytes)
+        .map(|kind| kind.mime_type())
+        .ok_or_else(|| "link preview image magic bytes are unsupported".to_string())?;
+    if sniffed != declared_mime {
+        return Err("link preview image content type does not match its bytes".to_string());
+    }
+    let format = match sniffed {
+        "image/jpeg" => image::ImageFormat::Jpeg,
+        "image/png" => image::ImageFormat::Png,
+        "image/webp" => image::ImageFormat::WebP,
+        _ => return Err("link preview image type is unsupported".to_string()),
+    };
+    if declares_animation(bytes, format) {
+        return Err("animated link preview images are unsupported".to_string());
+    }
+
+    let reader = image::ImageReader::with_format(Cursor::new(bytes), format);
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|_| "link preview image is malformed".to_string())?;
+    let (width, height) = decoder.dimensions();
+    if width == 0
+        || height == 0
+        || width > MAX_IMAGE_DIMENSION
+        || height > MAX_IMAGE_DIMENSION
+        || u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS
+    {
+        return Err("link preview image dimensions exceed safe limits".to_string());
+    }
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
+    limits.max_alloc = Some(MAX_IMAGE_PIXELS * 4);
+    decoder
+        .set_limits(limits)
+        .map_err(|_| "link preview image exceeds safe decoding limits".to_string())?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut decoded = image::DynamicImage::from_decoder(decoder)
+        .map_err(|_| "link preview image could not be decoded".to_string())?;
+    decoded.apply_orientation(orientation);
+    let decoded = decoded.thumbnail(MAX_SANITIZED_DIMENSION, MAX_SANITIZED_DIMENSION);
+    let mut output = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 82)
+        .encode_image(&decoded)
+        .map_err(|_| "link preview image could not be sanitized".to_string())?;
+    Ok(format!(
+        "data:image/jpeg;base64,{}",
+        BASE64_STANDARD.encode(output)
+    ))
+}
+
+fn declares_animation(bytes: &[u8], format: image::ImageFormat) -> bool {
+    match format {
+        image::ImageFormat::Png => bytes.windows(4).any(|chunk| chunk == b"acTL"),
+        image::ImageFormat::WebP => {
+            bytes.len() >= 21
+                && bytes.starts_with(b"RIFF")
+                && &bytes[8..12] == b"WEBP"
+                && ((&bytes[12..16] == b"VP8X" && bytes[20] & 0x02 != 0)
+                    || bytes.windows(4).any(|chunk| chunk == b"ANIM"))
+        }
+        _ => false,
+    }
 }
 
 fn extract_link_preview_metadata(html: &str) -> Option<LinkPreviewMetadata> {
@@ -177,7 +327,12 @@ fn extract_link_preview_metadata(html: &str) -> Option<LinkPreviewMetadata> {
     let site_name = extract_meta_content(html, "property", "og:site_name")
         .and_then(|value| normalize_metadata_text(&value));
 
-    Some(LinkPreviewMetadata { title, site_name })
+    Some(LinkPreviewMetadata {
+        title,
+        site_name,
+        image_data_url: None,
+        image_domain: None,
+    })
 }
 
 fn extract_meta_content(html: &str, key_attr: &str, key_value: &str) -> Option<String> {
@@ -300,7 +455,13 @@ fn decode_html_entities(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_link_preview_metadata, LinkPreviewMetadata};
+    use super::{
+        declares_animation, extract_image_url, extract_link_preview_metadata, sanitize_image,
+        LinkPreviewMetadata,
+    };
+    use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
+    use std::io::Cursor;
+    use url::Url;
 
     #[test]
     fn metadata_prefers_open_graph_and_reads_site_name() {
@@ -312,6 +473,8 @@ mod tests {
             Some(LinkPreviewMetadata {
                 title: "Rich previews & cards".to_string(),
                 site_name: Some("Buzz".to_string()),
+                image_data_url: None,
+                image_domain: None,
             })
         );
     }
@@ -328,6 +491,38 @@ mod tests {
                 .map(|metadata| metadata.title),
             Some("Plain title".to_string())
         );
+    }
+
+    #[test]
+    fn image_metadata_resolves_relative_urls_and_prefers_open_graph() {
+        let page = Url::parse("https://example.com/articles/one").unwrap();
+        let html = r#"<meta name="twitter:image" content="https://cdn.example/twitter.jpg">
+          <meta property="og:image" content="../preview.png">"#;
+        assert_eq!(
+            extract_image_url(html, &page).unwrap().as_str(),
+            "https://example.com/preview.png"
+        );
+    }
+
+    #[test]
+    fn sanitizer_rejects_mime_mismatch_and_outputs_static_jpeg() {
+        let source = DynamicImage::ImageRgb8(RgbImage::from_pixel(2, 2, Rgb([10, 20, 30])));
+        let mut png = Cursor::new(Vec::new());
+        source.write_to(&mut png, ImageFormat::Png).unwrap();
+        assert!(sanitize_image(png.get_ref(), "image/jpeg").is_err());
+        let sanitized = sanitize_image(png.get_ref(), "image/png").unwrap();
+        assert!(sanitized.starts_with("data:image/jpeg;base64,"));
+    }
+
+    #[test]
+    fn animation_markers_are_rejected_before_decode() {
+        let mut apng = b"\x89PNG\r\n\x1a\n".to_vec();
+        apng.extend_from_slice(b"junkacTLjunk");
+        assert!(declares_animation(&apng, ImageFormat::Png));
+
+        let mut webp = b"RIFF\x00\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00".to_vec();
+        webp.push(0x02);
+        assert!(declares_animation(&webp, ImageFormat::WebP));
     }
 
     #[test]

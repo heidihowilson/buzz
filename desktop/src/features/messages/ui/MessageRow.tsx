@@ -370,6 +370,7 @@ export const MessageRow = React.memo(
                 isKnownAgentPubkey,
               )}
               content={message.body}
+              messageId={message.id}
               customEmoji={customEmoji}
               imetaByUrl={imetaByUrl}
               agentMentionPubkeysByName={agentMentionPubkeysByName}

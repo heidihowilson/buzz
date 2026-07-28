@@ -7,6 +7,8 @@ import type { SupportedLinkPreview } from "./linkPreview";
 type LinkPreviewMetadata = {
   title: string;
   siteName: string | null;
+  imageDataUrl: string | null;
+  imageDomain: string | null;
 };
 
 const metadataCache = new Map<
@@ -96,6 +98,8 @@ export function useResolvedLinkPreviews(
             preview.kind === "generic-link" && metadata.siteName
               ? metadata.siteName
               : preview.provider,
+          imageDataUrl: metadata.imageDataUrl,
+          imageDomain: metadata.imageDomain,
         };
       }),
     [previews, resolvedMetadata],

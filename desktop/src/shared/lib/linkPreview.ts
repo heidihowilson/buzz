@@ -15,6 +15,9 @@ export type SupportedLinkPreview = {
   href: string;
   provider: string;
   title: string;
+  /** Sanitized native-fetched bitmap; never a remote URL. */
+  imageDataUrl?: string | null;
+  imageDomain?: string | null;
   typeLabel:
     | "PR"
     | "issue"

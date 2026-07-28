@@ -228,6 +228,7 @@ export function FeedSection({
                   <Markdown
                     className="max-w-none text-sm leading-snug text-muted-foreground"
                     content={feedContent(item)}
+                    messageId={item.id}
                     mentionNames={mentionNames}
                     mentionPubkeysByName={mentionPubkeysByName}
                   />

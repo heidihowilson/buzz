@@ -212,6 +212,7 @@ export function InboxMessageRow({
                 isKnownAgentPubkey,
               )}
               content={message.content}
+              messageId={message.id}
               customEmoji={customEmoji}
               mentionNames={message.mentionNames}
               mentionPubkeysByName={message.mentionPubkeysByName}
