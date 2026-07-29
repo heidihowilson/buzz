@@ -6,6 +6,7 @@ import { Button } from "@/shared/ui/button";
 import {
   Attachment,
   AttachmentContent,
+  AttachmentDescription,
   AttachmentMedia,
   AttachmentTitle,
   AttachmentTrigger,
@@ -124,11 +125,11 @@ export function LinkPreviewAttachment({
   const showImage = preview.imageState === "image";
 
   return (
-    <div className={cn("relative w-80 max-w-full shrink-0", className)}>
+    <div className={cn("relative w-[22.5rem] max-w-full shrink-0", className)}>
       <Attachment
         className={cn(
           "w-full no-underline shadow-none",
-          reserveImage && "gap-0 p-0",
+          reserveImage && "h-20 min-h-20 max-h-20 gap-0 p-0",
         )}
         data-image-state={preview.imageState}
         data-link-preview={preview.kind}
@@ -137,7 +138,7 @@ export function LinkPreviewAttachment({
         {reserveImage ? (
           <AttachmentMedia
             aria-hidden={showImage ? undefined : "true"}
-            className="h-auto w-16 self-stretch rounded-none bg-muted sm:w-[6.6875rem]"
+            className="aspect-auto h-full min-h-0 w-28 min-w-28 max-w-28 self-stretch rounded-none bg-muted sm:w-32 sm:min-w-32 sm:max-w-32"
             data-link-preview-thumbnail=""
             variant="image"
           >
@@ -163,7 +164,20 @@ export function LinkPreviewAttachment({
           <div className="truncate text-xs font-medium leading-4 text-muted-foreground">
             {preview.provider}
           </div>
-          <AttachmentTitle>{preview.title}</AttachmentTitle>
+          <AttachmentTitle
+            className={
+              reserveImage
+                ? preview.description
+                  ? "truncate"
+                  : "line-clamp-2 whitespace-normal"
+                : undefined
+            }
+          >
+            {preview.title}
+          </AttachmentTitle>
+          {reserveImage && preview.description ? (
+            <AttachmentDescription>{preview.description}</AttachmentDescription>
+          ) : null}
         </AttachmentContent>
         <AttachmentTrigger asChild>
           <a

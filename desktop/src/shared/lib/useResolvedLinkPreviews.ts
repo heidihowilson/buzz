@@ -7,6 +7,7 @@ import type { SupportedLinkPreview } from "./linkPreview";
 type LinkPreviewMetadata = {
   title: string;
   siteName: string | null;
+  description: string | null;
   imageDataUrl: string | null;
   imageDomain: string | null;
 };
@@ -53,6 +54,7 @@ function cacheMetadata(href: string): Promise<LinkPreviewMetadata | null> {
 export type LinkPreviewImageState = "pending" | "image" | "none";
 
 export type ResolvedLinkPreview = SupportedLinkPreview & {
+  description?: string | null;
   imageState: LinkPreviewImageState;
 };
 
@@ -76,6 +78,7 @@ export function resolveLinkPreview(
   return {
     ...preview,
     title: metadata.title,
+    description: metadata.description,
     provider:
       preview.kind === "generic-link" && metadata.siteName
         ? metadata.siteName

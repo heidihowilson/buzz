@@ -113,10 +113,12 @@ test.beforeEach(async ({ page }, testInfo) => {
     : testInfo.title.includes("link preview image geometry")
       ? {
           linkPreviewMetadata: {
-            title: "Ship a compact horizontal link preview",
+            title:
+              "Ship a wider horizontal preview with a two-line title that wraps cleanly",
             siteName: "GitHub",
+            description: "A polished, stable preview for shared links.",
             imageDataUrl:
-              "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='382' height='200'%3E%3Crect width='382' height='200' fill='%237c3aed'/%3E%3Ccircle cx='92' cy='100' r='48' fill='%23fff' fill-opacity='.9'/%3E%3C/svg%3E",
+              "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='120'%3E%3Crect width='1600' height='120' fill='%237c3aed'/%3E%3Ccircle cx='92' cy='60' r='48' fill='%23fff' fill-opacity='.9'/%3E%3C/svg%3E",
             imageDomain: "opengraph.githubassets.com",
           },
           linkPreviewMetadataDelayMs: 800,
@@ -124,7 +126,7 @@ test.beforeEach(async ({ page }, testInfo) => {
       : testInfo.title.includes("link preview no-image collapse")
         ? {
             linkPreviewMetadata: null,
-            linkPreviewMetadataDelayMs: 800,
+            linkPreviewMetadataDelayMs: 2_000,
           }
         : undefined;
   await installMockBridge(page, mock);
@@ -279,9 +281,8 @@ test("markdown tables overflow wide content and fill the message when narrow", a
 test("link preview image geometry stays stable while loading", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246";
-
   for (const width of [800, 420]) {
+    const previewUrl = `https://github.com/block/buzz/pull/3246?viewport=${width}`;
     await page.setViewportSize({ width: 800, height: 700 });
     await page.goto("/");
     await page.getByTestId("channel-general").click();
@@ -330,8 +331,12 @@ test("link preview image geometry stays stable while loading", async ({
               ).paddingLeft,
             )
           : undefined,
+        titleHeight: element
+          .querySelector('[data-slot="attachment-title"]')
+          ?.getBoundingClientRect().height,
         textLeft: contentRect?.left,
         thumbnailWidth: thumbnailRect?.width,
+        width: cardRect.width,
       };
     });
 
@@ -344,6 +349,12 @@ test("link preview image geometry stays stable while loading", async ({
     }
     const loaded = await card.evaluate((element) => ({
       height: element.getBoundingClientRect().height,
+      titleHeight: element
+        .querySelector('[data-slot="attachment-title"]')
+        ?.getBoundingClientRect().height,
+      descriptionHeight: element
+        .querySelector('[data-slot="attachment-description"]')
+        ?.getBoundingClientRect().height,
       textLeft: element
         .querySelector('[data-slot="attachment-content"]')
         ?.getBoundingClientRect().left,
@@ -355,7 +366,12 @@ test("link preview image geometry stays stable while loading", async ({
     expect(loaded.height).toBe(pending.height);
     expect(loaded.textLeft).toBe(pending.textLeft);
     expect(loaded.thumbnailWidth).toBe(pending.thumbnailWidth);
-    expect(loaded.thumbnailWidth).toBe(width < 640 ? 64 : 107);
+    expect(loaded.thumbnailWidth).toBe(width < 640 ? 112 : 128);
+    expect(pending.height).toBe(80);
+    expect(pending.width).toBe(width < 640 ? 325 : 360);
+    expect(pending.titleHeight).toBe(20);
+    expect(loaded.titleHeight).toBe(20);
+    expect(loaded.descriptionHeight).toBe(16);
     expect(pending.imageBottomInset).toBeCloseTo(1, 1);
     expect(pending.imageLeftInset).toBeCloseTo(1, 1);
     expect(pending.imageTopInset).toBeCloseTo(1, 1);
@@ -363,12 +379,48 @@ test("link preview image geometry stays stable while loading", async ({
   }
 });
 
+test("link preview image geometry constrains multiple cards and shows one remove control", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1218, height: 700 });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+
+  const previewUrls = [
+    "https://github.com/block/buzz/pull/3246?card=1",
+    "https://github.com/block/buzz/pull/3246?card=2",
+    "https://github.com/block/buzz/pull/3246?card=3",
+  ];
+  await page.getByTestId("message-input").fill(previewUrls.join(" "));
+  await page.getByTestId("send-message").click();
+
+  const row = page.getByTestId("message-row").last();
+  const cards = row.locator('[data-link-preview="github-pull-request"]');
+  await expect(cards).toHaveCount(3);
+
+  for (const card of await cards.all()) {
+    await expect(card).toHaveAttribute("data-image-state", "image");
+    await expect(card).toHaveCSS("height", "80px");
+    await expect(card.locator("[data-link-preview-thumbnail]")).toHaveCSS(
+      "width",
+      "128px",
+    );
+  }
+
+  const removeControls = row.getByRole("button", {
+    name: "Remove previews for everyone",
+  });
+  await expect(removeControls).toHaveCount(1);
+  await expect(
+    cards.last().locator("..").getByRole("button"),
+  ).toHaveAccessibleName("Remove previews for everyone");
+});
+
 test("link preview no-image collapse restores the compact card", async ({
   page,
 }) => {
-  const previewUrl = "https://github.com/block/buzz/pull/3246";
-
   for (const width of [800, 420]) {
+    const previewUrl = `https://github.com/block/buzz/pull/3246?viewport=${width}`;
     await page.setViewportSize({ width: 800, height: 700 });
     await page.goto("/");
     await page.getByTestId("channel-general").click();
@@ -381,6 +433,8 @@ test("link preview no-image collapse restores the compact card", async ({
       .last()
       .locator('[data-link-preview="github-pull-request"]');
     await expect(card).toHaveAttribute("data-image-state", "pending");
+    await expect(card).toBeVisible();
+    await expect(card).toHaveCSS("height", "80px");
     const pending = await card.evaluate((element) => ({
       height: element.getBoundingClientRect().height,
       textLeft: element

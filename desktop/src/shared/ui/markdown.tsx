@@ -2002,11 +2002,12 @@ function MarkdownInner({
               className="max-w-full flex-wrap overflow-visible pb-0"
               data-link-preview-list=""
             >
-              {resolvedLinkPreviews.map((preview) => (
+              {resolvedLinkPreviews.map((preview, index) => (
                 <LinkPreviewAttachment
                   key={preview.href}
                   onRemove={
-                    onRemoveLinkPreviewsForEveryone
+                    onRemoveLinkPreviewsForEveryone &&
+                    index === resolvedLinkPreviews.length - 1
                       ? () => setRemovePreviewDialogOpen(true)
                       : undefined
                   }

@@ -26,6 +26,7 @@ const MAX_METADATA_CHARS: usize = 180;
 pub struct LinkPreviewMetadata {
     title: String,
     site_name: Option<String>,
+    description: Option<String>,
     image_data_url: Option<String>,
     image_domain: Option<String>,
 }
@@ -328,10 +329,14 @@ fn extract_link_preview_metadata(html: &str) -> Option<LinkPreviewMetadata> {
         .and_then(|value| normalize_metadata_text(&value))?;
     let site_name = extract_meta_content(html, "property", "og:site_name")
         .and_then(|value| normalize_metadata_text(&value));
+    let description = extract_meta_content(html, "property", "og:description")
+        .or_else(|| extract_meta_content(html, "name", "twitter:description"))
+        .and_then(|value| normalize_metadata_text(&value));
 
     Some(LinkPreviewMetadata {
         title,
         site_name,
+        description,
         image_data_url: None,
         image_domain: None,
     })
@@ -483,12 +488,14 @@ mod tests {
     fn metadata_prefers_open_graph_and_reads_site_name() {
         let html = r#"<meta content="Buzz" property="og:site_name">
           <meta content="Rich previews &amp; cards" property="og:title">
+          <meta content="Safe &amp; useful previews" property="og:description">
           <meta name="twitter:title" content="Twitter fallback"><title>Fallback</title>"#;
         assert_eq!(
             extract_link_preview_metadata(html),
             Some(LinkPreviewMetadata {
                 title: "Rich previews & cards".to_string(),
                 site_name: Some("Buzz".to_string()),
+                description: Some("Safe & useful previews".to_string()),
                 image_data_url: None,
                 image_domain: None,
             })
