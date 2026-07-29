@@ -112,6 +112,14 @@ function LinkPreviewLogo({ preview }: { preview: ResolvedLinkPreview }) {
   }
 }
 
+function getHostname(preview: ResolvedLinkPreview): string {
+  try {
+    return new URL(preview.href).hostname.replace(/^www\./, "");
+  } catch {
+    return preview.provider;
+  }
+}
+
 export function LinkPreviewAttachment({
   className,
   onRemove,
@@ -123,6 +131,7 @@ export function LinkPreviewAttachment({
 }) {
   const reserveImage = preview.imageState !== "none";
   const showImage = preview.imageState === "image";
+  const hostname = getHostname(preview);
 
   return (
     <div className={cn("relative w-[22.5rem] max-w-full shrink-0", className)}>
@@ -161,8 +170,11 @@ export function LinkPreviewAttachment({
           </AttachmentMedia>
         )}
         <AttachmentContent className={reserveImage ? "px-3 py-2.5" : undefined}>
-          <div className="truncate text-xs font-medium leading-4 text-muted-foreground">
-            {preview.provider}
+          <div
+            className="truncate text-xs font-normal leading-4 text-muted-foreground"
+            data-link-preview-hostname=""
+          >
+            {reserveImage ? hostname : preview.provider}
           </div>
           <AttachmentTitle
             className={

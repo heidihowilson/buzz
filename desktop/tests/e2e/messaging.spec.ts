@@ -372,6 +372,9 @@ test("link preview image geometry stays stable while loading", async ({
     expect(pending.titleHeight).toBe(20);
     expect(loaded.titleHeight).toBe(20);
     expect(loaded.descriptionHeight).toBe(16);
+    await expect(card.locator("[data-link-preview-hostname]")).toHaveText(
+      "github.com",
+    );
     expect(pending.imageBottomInset).toBeCloseTo(1, 1);
     expect(pending.imageLeftInset).toBeCloseTo(1, 1);
     expect(pending.imageTopInset).toBeCloseTo(1, 1);
