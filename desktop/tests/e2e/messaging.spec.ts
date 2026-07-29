@@ -302,15 +302,38 @@ test("link preview image geometry stays stable while loading", async ({
         path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/${width}-pending.png`,
       });
     }
-    const pending = await card.evaluate((element) => ({
-      height: element.getBoundingClientRect().height,
-      textLeft: element
+    const pending = await card.evaluate((element) => {
+      const cardRect = element.getBoundingClientRect();
+      const contentRect = element
         .querySelector('[data-slot="attachment-content"]')
-        ?.getBoundingClientRect().left,
-      thumbnailWidth: element
+        ?.getBoundingClientRect();
+      const thumbnailRect = element
         .querySelector("[data-link-preview-thumbnail]")
-        ?.getBoundingClientRect().width,
-    }));
+        ?.getBoundingClientRect();
+      return {
+        height: cardRect.height,
+        imageBottomInset: thumbnailRect
+          ? cardRect.bottom - thumbnailRect.bottom
+          : undefined,
+        imageLeftInset: thumbnailRect
+          ? thumbnailRect.left - cardRect.left
+          : undefined,
+        imageTopInset: thumbnailRect
+          ? thumbnailRect.top - cardRect.top
+          : undefined,
+        textInset: contentRect
+          ? Number.parseFloat(
+              getComputedStyle(
+                element.querySelector(
+                  '[data-slot="attachment-content"]',
+                ) as Element,
+              ).paddingLeft,
+            )
+          : undefined,
+        textLeft: contentRect?.left,
+        thumbnailWidth: thumbnailRect?.width,
+      };
+    });
 
     await expect(card).toHaveAttribute("data-image-state", "image");
     if (process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR) {
@@ -333,6 +356,10 @@ test("link preview image geometry stays stable while loading", async ({
     expect(loaded.textLeft).toBe(pending.textLeft);
     expect(loaded.thumbnailWidth).toBe(pending.thumbnailWidth);
     expect(loaded.thumbnailWidth).toBe(width < 640 ? 64 : 107);
+    expect(pending.imageBottomInset).toBeCloseTo(1, 1);
+    expect(pending.imageLeftInset).toBeCloseTo(1, 1);
+    expect(pending.imageTopInset).toBeCloseTo(1, 1);
+    expect(pending.textInset).toBe(12);
   }
 });
 

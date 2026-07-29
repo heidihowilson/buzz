@@ -126,7 +126,10 @@ export function LinkPreviewAttachment({
   return (
     <div className={cn("relative w-80 max-w-full shrink-0", className)}>
       <Attachment
-        className="w-full no-underline shadow-none"
+        className={cn(
+          "w-full no-underline shadow-none",
+          reserveImage && "gap-0 p-0",
+        )}
         data-image-state={preview.imageState}
         data-link-preview={preview.kind}
         orientation="horizontal"
@@ -134,7 +137,7 @@ export function LinkPreviewAttachment({
         {reserveImage ? (
           <AttachmentMedia
             aria-hidden={showImage ? undefined : "true"}
-            className="h-12 w-16 rounded-lg bg-muted sm:h-14 sm:w-[6.6875rem]"
+            className="h-auto w-16 self-stretch rounded-none bg-muted sm:w-[6.6875rem]"
             data-link-preview-thumbnail=""
             variant="image"
           >
@@ -156,7 +159,7 @@ export function LinkPreviewAttachment({
             <LinkPreviewLogo preview={preview} />
           </AttachmentMedia>
         )}
-        <AttachmentContent>
+        <AttachmentContent className={reserveImage ? "px-3 py-2.5" : undefined}>
           <div className="truncate text-xs font-medium leading-4 text-muted-foreground">
             {preview.provider}
           </div>
