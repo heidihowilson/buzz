@@ -1,6 +1,6 @@
 import { Globe, X } from "lucide-react";
 
-import type { SupportedLinkPreview } from "@/shared/lib/linkPreview";
+import type { ResolvedLinkPreview } from "@/shared/lib/useResolvedLinkPreviews";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import {
@@ -89,7 +89,7 @@ function GoogleSlidesLogo({ className }: { className?: string }) {
   );
 }
 
-function LinkPreviewLogo({ preview }: { preview: SupportedLinkPreview }) {
+function LinkPreviewLogo({ preview }: { preview: ResolvedLinkPreview }) {
   switch (preview.kind) {
     case "github-issue":
     case "github-pull-request":
@@ -118,32 +118,45 @@ export function LinkPreviewAttachment({
 }: {
   className?: string;
   onRemove?: () => void;
-  preview: SupportedLinkPreview;
+  preview: ResolvedLinkPreview;
 }) {
-  const showImage = Boolean(preview.imageDataUrl && preview.imageDomain);
+  const reserveImage = preview.imageState !== "none";
+  const showImage = preview.imageState === "image";
 
   return (
     <div className={cn("relative w-80 max-w-full shrink-0", className)}>
       <Attachment
         className="w-full no-underline shadow-none"
+        data-image-state={preview.imageState}
         data-link-preview={preview.kind}
-        orientation={showImage ? "vertical" : "horizontal"}
+        orientation="horizontal"
       >
-        {showImage ? (
-          <div className="relative -mx-3 -mt-2.5 w-[calc(100%+1.5rem)] overflow-hidden border-b border-border/70 bg-muted">
-            <img
-              alt={`Preview from ${preview.imageDomain}`}
-              className="aspect-[1.91/1] w-full object-cover"
-              src={preview.imageDataUrl ?? undefined}
-            />
-          </div>
-        ) : null}
-        {!showImage ? (
+        {reserveImage ? (
+          <AttachmentMedia
+            aria-hidden={showImage ? undefined : "true"}
+            className="h-12 w-16 rounded-lg bg-muted sm:h-14 sm:w-[6.6875rem]"
+            data-link-preview-thumbnail=""
+            variant="image"
+          >
+            {showImage ? (
+              <img
+                alt={`Preview from ${preview.imageDomain}`}
+                className="h-full w-full object-cover"
+                src={preview.imageDataUrl ?? undefined}
+              />
+            ) : (
+              <div
+                className="h-full w-full animate-pulse bg-muted-foreground/10"
+                data-link-preview-skeleton=""
+              />
+            )}
+          </AttachmentMedia>
+        ) : (
           <AttachmentMedia className="link-preview-media">
             <LinkPreviewLogo preview={preview} />
           </AttachmentMedia>
-        ) : null}
-        <AttachmentContent className={showImage ? "w-full" : undefined}>
+        )}
+        <AttachmentContent>
           <div className="truncate text-xs font-medium leading-4 text-muted-foreground">
             {preview.provider}
           </div>

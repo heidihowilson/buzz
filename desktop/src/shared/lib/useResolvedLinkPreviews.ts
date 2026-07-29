@@ -50,12 +50,47 @@ function cacheMetadata(href: string): Promise<LinkPreviewMetadata | null> {
   return promise;
 }
 
+export type LinkPreviewImageState = "pending" | "image" | "none";
+
+export type ResolvedLinkPreview = SupportedLinkPreview & {
+  imageState: LinkPreviewImageState;
+};
+
+type ResolvedMetadataByHref = Record<
+  string,
+  LinkPreviewMetadata | null | undefined
+>;
+
+export function resolveLinkPreview(
+  preview: SupportedLinkPreview,
+  metadata: LinkPreviewMetadata | null | undefined,
+): ResolvedLinkPreview {
+  if (metadata === undefined) {
+    return { ...preview, imageState: "pending" };
+  }
+  if (metadata === null) {
+    return { ...preview, imageState: "none" };
+  }
+
+  const hasImage = Boolean(metadata.imageDataUrl && metadata.imageDomain);
+  return {
+    ...preview,
+    title: metadata.title,
+    provider:
+      preview.kind === "generic-link" && metadata.siteName
+        ? metadata.siteName
+        : preview.provider,
+    imageDataUrl: hasImage ? metadata.imageDataUrl : null,
+    imageDomain: hasImage ? metadata.imageDomain : null,
+    imageState: hasImage ? "image" : "none",
+  };
+}
+
 export function useResolvedLinkPreviews(
   previews: SupportedLinkPreview[],
-): SupportedLinkPreview[] {
-  const [resolvedMetadata, setResolvedMetadata] = React.useState<
-    Record<string, LinkPreviewMetadata>
-  >({});
+): ResolvedLinkPreview[] {
+  const [resolvedMetadata, setResolvedMetadata] =
+    React.useState<ResolvedMetadataByHref>({});
 
   React.useEffect(() => {
     let cancelled = false;
@@ -72,7 +107,7 @@ export function useResolvedLinkPreviews(
       }
 
       void cacheMetadata(preview.href).then((metadata) => {
-        if (cancelled || !metadata) return;
+        if (cancelled) return;
         setResolvedMetadata((current) =>
           current[preview.href] === metadata
             ? current
@@ -88,20 +123,9 @@ export function useResolvedLinkPreviews(
 
   return React.useMemo(
     () =>
-      previews.map((preview) => {
-        const metadata = resolvedMetadata[preview.href];
-        if (!metadata) return preview;
-        return {
-          ...preview,
-          title: metadata.title,
-          provider:
-            preview.kind === "generic-link" && metadata.siteName
-              ? metadata.siteName
-              : preview.provider,
-          imageDataUrl: metadata.imageDataUrl,
-          imageDomain: metadata.imageDomain,
-        };
-      }),
+      previews.map((preview) =>
+        resolveLinkPreview(preview, resolvedMetadata[preview.href]),
+      ),
     [previews, resolvedMetadata],
   );
 }

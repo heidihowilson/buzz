@@ -270,6 +270,13 @@ type MockBridgeOptions = {
   profileReadError?: string;
   profileUpdateError?: string;
   profileUpdateErrors?: string[];
+  linkPreviewMetadata?: {
+    title: string;
+    siteName: string | null;
+    imageDataUrl: string | null;
+    imageDomain: string | null;
+  } | null;
+  linkPreviewMetadataDelayMs?: number;
   searchProfiles?: MockSearchProfileSeed[];
   updateAvailable?: boolean;
   updateChannelDelayMs?: number;

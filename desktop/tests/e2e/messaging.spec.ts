@@ -1,5 +1,7 @@
 import { expect, test, type Locator } from "@playwright/test";
 
+import { waitForAnimations } from "../helpers/animations";
+
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { expectCornerRadiusPx, expectSmoothCorners } from "../helpers/css";
 import { openSettings } from "../helpers/settings";
@@ -108,7 +110,23 @@ test.beforeEach(async ({ page }, testInfo) => {
           },
         ],
       }
-    : undefined;
+    : testInfo.title.includes("link preview image geometry")
+      ? {
+          linkPreviewMetadata: {
+            title: "Ship a compact horizontal link preview",
+            siteName: "GitHub",
+            imageDataUrl:
+              "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='382' height='200'%3E%3Crect width='382' height='200' fill='%237c3aed'/%3E%3Ccircle cx='92' cy='100' r='48' fill='%23fff' fill-opacity='.9'/%3E%3C/svg%3E",
+            imageDomain: "opengraph.githubassets.com",
+          },
+          linkPreviewMetadataDelayMs: 800,
+        }
+      : testInfo.title.includes("link preview no-image collapse")
+        ? {
+            linkPreviewMetadata: null,
+            linkPreviewMetadataDelayMs: 800,
+          }
+        : undefined;
   await installMockBridge(page, mock);
 });
 
@@ -256,6 +274,106 @@ test("markdown tables overflow wide content and fill the message when narrow", a
       }),
     )
     .toBeLessThanOrEqual(1);
+});
+
+test("link preview image geometry stays stable while loading", async ({
+  page,
+}) => {
+  const previewUrl = "https://github.com/block/buzz/pull/3246";
+
+  for (const width of [800, 420]) {
+    await page.setViewportSize({ width: 800, height: 700 });
+    await page.goto("/");
+    await page.getByTestId("channel-general").click();
+    await page.setViewportSize({ width, height: 700 });
+    await page.getByTestId("message-input").fill(previewUrl);
+    await page.getByTestId("send-message").click();
+
+    const card = page
+      .getByTestId("message-row")
+      .last()
+      .locator('[data-link-preview="github-pull-request"]');
+    await expect(card).toHaveAttribute("data-image-state", "pending");
+    await expect(card).toBeVisible();
+    await expect(card.locator("[data-link-preview-thumbnail]")).toBeVisible();
+    if (process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR) {
+      await card.screenshot({
+        animations: "disabled",
+        path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/${width}-pending.png`,
+      });
+    }
+    const pending = await card.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      textLeft: element
+        .querySelector('[data-slot="attachment-content"]')
+        ?.getBoundingClientRect().left,
+      thumbnailWidth: element
+        .querySelector("[data-link-preview-thumbnail]")
+        ?.getBoundingClientRect().width,
+    }));
+
+    await expect(card).toHaveAttribute("data-image-state", "image");
+    if (process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR) {
+      await waitForAnimations(page);
+      await card.screenshot({
+        path: `${process.env.BUZZ_LINK_PREVIEW_SCREENSHOTS_DIR}/${width}-loaded.png`,
+      });
+    }
+    const loaded = await card.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      textLeft: element
+        .querySelector('[data-slot="attachment-content"]')
+        ?.getBoundingClientRect().left,
+      thumbnailWidth: element
+        .querySelector("[data-link-preview-thumbnail]")
+        ?.getBoundingClientRect().width,
+    }));
+
+    expect(loaded.height).toBe(pending.height);
+    expect(loaded.textLeft).toBe(pending.textLeft);
+    expect(loaded.thumbnailWidth).toBe(pending.thumbnailWidth);
+    expect(loaded.thumbnailWidth).toBe(width < 640 ? 64 : 107);
+  }
+});
+
+test("link preview no-image collapse restores the compact card", async ({
+  page,
+}) => {
+  const previewUrl = "https://github.com/block/buzz/pull/3246";
+
+  for (const width of [800, 420]) {
+    await page.setViewportSize({ width: 800, height: 700 });
+    await page.goto("/");
+    await page.getByTestId("channel-general").click();
+    await page.setViewportSize({ width, height: 700 });
+    await page.getByTestId("message-input").fill(previewUrl);
+    await page.getByTestId("send-message").click();
+
+    const card = page
+      .getByTestId("message-row")
+      .last()
+      .locator('[data-link-preview="github-pull-request"]');
+    await expect(card).toHaveAttribute("data-image-state", "pending");
+    const pending = await card.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      textLeft: element
+        .querySelector('[data-slot="attachment-content"]')
+        ?.getBoundingClientRect().left,
+    }));
+
+    await expect(card).toHaveAttribute("data-image-state", "none");
+    await expect(card.locator("[data-link-preview-thumbnail]")).toHaveCount(0);
+    await expect(card.locator(".link-preview-media")).toBeVisible();
+    const collapsed = await card.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      textLeft: element
+        .querySelector('[data-slot="attachment-content"]')
+        ?.getBoundingClientRect().left,
+    }));
+
+    expect(collapsed.height).toBeLessThan(pending.height);
+    expect(collapsed.textLeft).toBeLessThan(pending.textLeft ?? 0);
+  }
 });
 
 test("supported link previews keep the message link visible", async ({

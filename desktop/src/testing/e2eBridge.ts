@@ -279,6 +279,13 @@ type E2eConfig = {
     profileReadError?: string;
     profileUpdateError?: string;
     profileUpdateErrors?: string[];
+    linkPreviewMetadata?: {
+      title: string;
+      siteName: string | null;
+      imageDataUrl: string | null;
+      imageDomain: string | null;
+    } | null;
+    linkPreviewMetadataDelayMs?: number;
     searchProfiles?: MockSearchProfileSeed[];
     updateAvailable?: boolean;
     updateChannelDelayMs?: number;
@@ -9884,6 +9891,13 @@ export function maybeInstallE2eTauriMocks() {
         return;
       case "fetch_join_policy":
         return activeConfig?.mock?.joinPolicy ?? null;
+      case "fetch_link_preview_metadata": {
+        const delayMs = activeConfig?.mock?.linkPreviewMetadataDelayMs ?? 0;
+        if (delayMs > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        }
+        return activeConfig?.mock?.linkPreviewMetadata ?? null;
+      }
       case "apply_workspace": {
         const applyDelayMs = activeConfig?.mock?.applyCommunityDelayMs ?? 0;
         if (applyDelayMs > 0) {
