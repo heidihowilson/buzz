@@ -286,6 +286,43 @@ fn extract_depth_limit(raw: &Value) -> Option<u32> {
         .and_then(|n| u32::try_from(n).ok())
 }
 
+/// The `sync_authoritative` extension field, with "present but malformed" kept
+/// distinct from "absent" for the same reason as [`BeforeId`]: a caller that
+/// asks for a writer-consistent read and is silently downgraded to a
+/// replica-eligible one gets the wrong answer with no way to detect it.
+enum SyncAuthoritative {
+    /// Field absent, or explicitly `false`. Normal routing applies.
+    No,
+    /// Explicitly `true`. Pin every read for this filter to the writer.
+    Yes,
+    /// Present but not a boolean. Rejects the request.
+    Malformed,
+}
+
+/// Read the `sync_authoritative` opt-in from a raw filter.
+///
+/// A caller sets this when *absence of a result is itself a decision* — the
+/// config-sync boot reconcile reads the relay head for a persona coordinate
+/// and treats "no event" as "deleted upstream". A replica that has not yet
+/// replayed the event returns exactly the same empty page as a genuine
+/// deletion, and no staleness budget bounds the difference: `RoutePredicate`
+/// bounds how far behind a served page may be, never whether a specific
+/// coordinate has replayed. The two are indistinguishable at the seam, so the
+/// only sound answer is to not route the read at all.
+///
+/// Deliberately per-filter and opt-in. Pinning every bridge read to the writer
+/// would erase the replica offload; pinning by kind would silently re-route
+/// display reads of the same kinds. The caller knows whether it is about to
+/// act on absence — nothing at this layer can infer it.
+fn extract_sync_authoritative(raw: &Value) -> SyncAuthoritative {
+    match raw.get("sync_authoritative") {
+        None => SyncAuthoritative::No,
+        Some(Value::Bool(true)) => SyncAuthoritative::Yes,
+        Some(Value::Bool(false)) => SyncAuthoritative::No,
+        Some(_) => SyncAuthoritative::Malformed,
+    }
+}
+
 /// Extract a thread pagination cursor from the raw filter JSON.
 ///
 /// The desktop pages `get_thread_replies` forward with a keyset cursor derived
@@ -1212,11 +1249,25 @@ async fn query_events_authed(
     // skips and the `before_id` BAD_REQUEST are decided here, before any DB
     // work is issued (validation errors are deterministic client mistakes, so
     // surfacing them ahead of transient DB errors is strictly more predictable).
-    let mut catchall_queries: Vec<(usize, buzz_db::EventQuery)> = Vec::new();
+    let mut catchall_queries: Vec<(usize, buzz_db::EventQuery, bool)> = Vec::new();
     for (idx, (raw, filter)) in raw_filters.iter().zip(filters.iter()).enumerate() {
         if handled.contains(&idx) {
             continue;
         }
+
+        // Validated before the access-scope skip below, so a malformed value
+        // rejects even on a filter whose channel the caller cannot see —
+        // a client bug is reported as a client bug, not masked by an empty page.
+        let sync_authoritative = match extract_sync_authoritative(raw) {
+            SyncAuthoritative::Yes => true,
+            SyncAuthoritative::No => false,
+            SyncAuthoritative::Malformed => {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "sync_authoritative must be a boolean",
+                ));
+            }
+        };
 
         if let Some(ch_id) = extract_channel_from_filter(filter) {
             if !accessible_channels.contains(&ch_id) {
@@ -1273,18 +1324,31 @@ async fn query_events_authed(
             query.offset = Some(offset);
         }
 
-        catchall_queries.push((idx, query));
+        catchall_queries.push((idx, query, sync_authoritative));
     }
 
     // Phase 2 — DB reads, bounded-concurrent, order-preserving (`buffered`).
     // Phase 3 consumes results in original filter order, so response ordering
     // and error semantics match the previous serial loop.
+    //
+    // `sync_authoritative` filters take `query_events` (writer pool) instead of
+    // `query_events_routed`: their caller acts on absence, which a lagging
+    // replica cannot be distinguished from. Everything else routes as before.
     use futures_util::stream::{self, StreamExt};
     let db = state.db.clone();
-    let mut catchall_results = stream::iter(catchall_queries.into_iter().map(|(idx, query)| {
-        let db = db.clone();
-        async move { (idx, db.query_events_routed("bridge_query", &query).await) }
-    }))
+    let mut catchall_results = stream::iter(catchall_queries.into_iter().map(
+        |(idx, query, sync_authoritative)| {
+            let db = db.clone();
+            async move {
+                let result = if sync_authoritative {
+                    db.query_events(&query).await
+                } else {
+                    db.query_events_routed("bridge_query", &query).await
+                };
+                (idx, result)
+            }
+        },
+    ))
     .buffered(crate::handlers::req::FILTER_QUERY_CONCURRENCY);
 
     // Phase 3 — post-processing, strictly in filter order.
@@ -3012,6 +3076,59 @@ mod tests {
             &serde_json::json!({ "top_level": 1 }),
             "top_level"
         ));
+    }
+
+    /// `sync_authoritative` opts in only on a literal `true`, and absence is
+    /// the normal-routing default — so every existing caller keeps replica
+    /// routing untouched.
+    #[test]
+    fn sync_authoritative_absent_or_false_means_normal_routing() {
+        assert!(matches!(
+            extract_sync_authoritative(&serde_json::json!({})),
+            SyncAuthoritative::No
+        ));
+        assert!(matches!(
+            extract_sync_authoritative(&serde_json::json!({ "kinds": [30175] })),
+            SyncAuthoritative::No
+        ));
+        assert!(matches!(
+            extract_sync_authoritative(&serde_json::json!({ "sync_authoritative": false })),
+            SyncAuthoritative::No
+        ));
+    }
+
+    #[test]
+    fn sync_authoritative_true_pins_the_read() {
+        assert!(matches!(
+            extract_sync_authoritative(&serde_json::json!({ "sync_authoritative": true })),
+            SyncAuthoritative::Yes
+        ));
+    }
+
+    /// A non-boolean value must NOT degrade to `No`. Silently serving a
+    /// replica-eligible read to a caller that asked for a writer-consistent
+    /// one returns a wrong answer the caller cannot detect — the same reason
+    /// `before_id` rejects rather than demoting to a head request.
+    #[test]
+    fn sync_authoritative_non_boolean_is_malformed() {
+        for value in [
+            serde_json::json!("true"),
+            serde_json::json!(1),
+            serde_json::json!(0),
+            serde_json::json!(null),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            assert!(
+                matches!(
+                    extract_sync_authoritative(&serde_json::json!({
+                        "sync_authoritative": value
+                    })),
+                    SyncAuthoritative::Malformed
+                ),
+                "expected {value} to be rejected as malformed"
+            );
+        }
     }
 
     #[test]
