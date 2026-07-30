@@ -869,40 +869,48 @@ pub async fn remove_reaction(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn edit_message(
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditMessageInput {
     channel_id: String,
     event_id: String,
     content: String,
+    #[serde(default)]
     media_tags: Vec<Vec<String>>,
-    emoji_tags: Option<Vec<Vec<String>>>,
-    // Pubkeys of mentions *newly added* by this edit (the composer diffs the
-    // edited body against the original). Only these get a `p` tag, so a typo-fix
-    // edit that leaves the mention set unchanged never re-wakes anyone.
-    mention_pubkeys: Option<Vec<String>>,
-    suppress_link_previews: Option<bool>,
+    #[serde(default)]
+    emoji_tags: Vec<Vec<String>>,
+    // Pubkeys of mentions *newly added* by this edit. Only these get a `p`
+    // tag, so a typo-fix edit never re-wakes existing mentions.
+    #[serde(default)]
+    mention_pubkeys: Vec<String>,
+    #[serde(default)]
+    suppress_link_previews: bool,
+}
+
+#[tauri::command]
+pub async fn edit_message(
+    input: EditMessageInput,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let channel_uuid = uuid::Uuid::parse_str(&channel_id)
-        .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
-    let target_eid = EventId::from_hex(&event_id).map_err(|e| format!("invalid event ID: {e}"))?;
-    let trimmed = content.trim();
+    let channel_uuid = uuid::Uuid::parse_str(&input.channel_id)
+        .map_err(|_| format!("invalid channel UUID: {}", input.channel_id))?;
+    let target_eid =
+        EventId::from_hex(&input.event_id).map_err(|e| format!("invalid event ID: {e}"))?;
+    let trimmed = input.content.trim();
     // Empty text is allowed when the edit still carries imeta attachments
     // (a media-only edit). Reject only when both are empty.
-    if trimmed.is_empty() && media_tags.is_empty() {
+    if trimmed.is_empty() && input.media_tags.is_empty() {
         return Err("edit must have content or attachments".into());
     }
-    let emoji = emoji_tags.unwrap_or_default();
-    let mentions = mention_pubkeys.unwrap_or_default();
-    let mention_refs: Vec<&str> = mentions.iter().map(|s| s.as_str()).collect();
+    let mention_refs: Vec<&str> = input.mention_pubkeys.iter().map(|s| s.as_str()).collect();
     let builder = events::build_message_edit(
         channel_uuid,
         target_eid,
         trimmed,
-        &media_tags,
-        &emoji,
+        &input.media_tags,
+        &input.emoji_tags,
         &mention_refs,
-        suppress_link_previews.unwrap_or(false),
+        input.suppress_link_previews,
     )?;
     submit_event(builder, &state).await?;
     Ok(())

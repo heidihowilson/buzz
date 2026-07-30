@@ -11198,7 +11198,7 @@ export function maybeInstallE2eTauriMocks() {
         return null;
       case "edit_message":
         return handleEditMessage(
-          payload as Parameters<typeof handleEditMessage>[0],
+          (payload as { input: Parameters<typeof handleEditMessage>[0] }).input,
           activeConfig,
         );
       case "add_reaction":

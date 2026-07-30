@@ -10,12 +10,14 @@ export async function editMessage(
   suppressLinkPreviews?: boolean,
 ): Promise<void> {
   await invokeTauri("edit_message", {
-    channelId,
-    eventId,
-    content,
-    mediaTags: mediaTags ?? [],
-    emojiTags: emojiTags ?? [],
-    mentionPubkeys: mentionPubkeys ?? null,
-    suppressLinkPreviews: suppressLinkPreviews ?? false,
+    input: {
+      channelId,
+      eventId,
+      content,
+      mediaTags: mediaTags ?? [],
+      emojiTags: emojiTags ?? [],
+      mentionPubkeys: mentionPubkeys ?? [],
+      suppressLinkPreviews: suppressLinkPreviews ?? false,
+    },
   });
 }
