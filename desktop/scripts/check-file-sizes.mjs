@@ -262,7 +262,10 @@ const overrides = new Map([
   // and CreatePersonaInput. The coordinate is the only identifier a catalog
   // copy keeps, so it is what stops the catalog re-offering "Add" for an
   // already-added foreign entry. Queued to split.
-  ["src/shared/api/types.ts", 1079],
+  // -43: team types (AgentTeam, the create/update inputs, and the new
+  // TeamCatalogSourceCoordinate) moved to teamTypes.ts, following the existing
+  // searchTypes/socialTypes pattern. Ratcheted down to the post-split count.
+  ["src/shared/api/types.ts", 1036],
   // harness-persona-sync feature growth, queued to split in the resolver-unify
   // refactor followup. discovery.rs is dominated by the new test module
   // (the effective_agent_command / divergent / create-time override matrix);
