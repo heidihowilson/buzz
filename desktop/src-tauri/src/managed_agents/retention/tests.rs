@@ -310,7 +310,7 @@ fn inbound_no_local_row_applies() {
 }
 
 #[test]
-fn inbound_equal_second_skips_and_preserves_pending() {
+fn inbound_equal_second_defers_and_preserves_pending() {
     let conn = test_db();
     // Pending local edit at t=1000.
     let local = sample_event();
@@ -324,11 +324,11 @@ fn inbound_equal_second_skips_and_preserves_pending() {
     };
     assert_eq!(
         retain_inbound_event(&conn, &inbound).unwrap(),
-        InboundOutcome::Skipped
+        InboundOutcome::Deferred
     );
 
-    // Local pending row is untouched: flag preserved, content unchanged so
-    // the flush republishes and the relay resolves last-writer-wins.
+    // Local pending row is untouched: flag preserved, content unchanged, for
+    // the boot decision pass to arbitrate against a writer-consistent head.
     let row = get_retained_event(&conn, 30175, "abc123", "test-persona")
         .unwrap()
         .unwrap();
@@ -337,7 +337,12 @@ fn inbound_equal_second_skips_and_preserves_pending() {
 }
 
 #[test]
-fn inbound_strictly_newer_applies_and_clears_pending() {
+fn inbound_strictly_newer_defers_to_pending_row() {
+    // The laundering vector this change exists to close mints STRICTLY NEWER
+    // events: a stale store re-signs old content at `max(now, head + 1)`. So a
+    // newer `created_at` is not evidence of newer intent, and applying it here
+    // would destroy the user's unpublished edit on exactly the input the fix
+    // targets. Deferral hands the pair to the boot decision pass instead.
     let conn = test_db();
     // Pending local edit at t=1000.
     let local = sample_event();
@@ -352,11 +357,44 @@ fn inbound_strictly_newer_applies_and_clears_pending() {
     };
     assert_eq!(
         retain_inbound_event(&conn, &inbound).unwrap(),
+        InboundOutcome::Deferred
+    );
+
+    // Every field of the pending row survives, and the caller does not patch
+    // disk: `Deferred` is not `Applied`.
+    let row = get_retained_event(&conn, 30175, "abc123", "test-persona")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.created_at, 1000);
+    assert!(row.pending_sync);
+    assert!(row.content.contains("Test"));
+    assert!(!row.content.contains("Remote"));
+}
+
+#[test]
+fn inbound_strictly_newer_applies_over_non_pending_row() {
+    let conn = test_db();
+    // Published local row at t=1000 — no local intent to protect.
+    retain_event(
+        &conn,
+        &RetainedEvent {
+            pending_sync: false,
+            ..sample_event()
+        },
+    )
+    .unwrap();
+
+    let inbound = RetainedEvent {
+        content: r#"{"display_name":"Remote"}"#.to_string(),
+        created_at: 2000,
+        pending_sync: false,
+        ..sample_event()
+    };
+    assert_eq!(
+        retain_inbound_event(&conn, &inbound).unwrap(),
         InboundOutcome::Applied
     );
 
-    // Inbound wins: content replaced and pending cleared, so the stale
-    // local edit stops republishing instead of looping.
     let row = get_retained_event(&conn, 30175, "abc123", "test-persona")
         .unwrap()
         .unwrap();
@@ -368,9 +406,16 @@ fn inbound_strictly_newer_applies_and_clears_pending() {
 #[test]
 fn inbound_older_skips() {
     let conn = test_db();
-    let mut local = sample_event();
-    local.created_at = 2000;
-    retain_event(&conn, &local).unwrap();
+    // Published local row — the ordering rule decides, not the pending guard.
+    retain_event(
+        &conn,
+        &RetainedEvent {
+            created_at: 2000,
+            pending_sync: false,
+            ..sample_event()
+        },
+    )
+    .unwrap();
 
     let inbound = RetainedEvent {
         content: r#"{"display_name":"Stale"}"#.to_string(),
@@ -387,6 +432,41 @@ fn inbound_older_skips() {
         .unwrap()
         .unwrap();
     assert_eq!(row.created_at, 2000);
+    assert!(!row.content.contains("Stale"));
+}
+
+#[test]
+fn inbound_older_defers_to_pending_row() {
+    // Third timestamp arm: the guard precedes ordering, so even an inbound
+    // event that would lose on `created_at` alone reports `Deferred`, not
+    // `Skipped`. The distinction is what lets the boot decision pass tell
+    // "lost the compare" apart from "still owes arbitration".
+    let conn = test_db();
+    retain_event(
+        &conn,
+        &RetainedEvent {
+            created_at: 2000,
+            ..sample_event()
+        },
+    )
+    .unwrap();
+
+    let inbound = RetainedEvent {
+        content: r#"{"display_name":"Stale"}"#.to_string(),
+        created_at: 1000,
+        pending_sync: false,
+        ..sample_event()
+    };
+    assert_eq!(
+        retain_inbound_event(&conn, &inbound).unwrap(),
+        InboundOutcome::Deferred
+    );
+
+    let row = get_retained_event(&conn, 30175, "abc123", "test-persona")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.created_at, 2000);
+    assert!(row.pending_sync);
     assert!(!row.content.contains("Stale"));
 }
 
@@ -493,7 +573,7 @@ fn test_equal_second_identical_id_is_a_noop() {
 }
 
 #[test]
-fn test_equal_second_lower_id_inbound_still_loses_to_pending_row() {
+fn test_equal_second_lower_id_inbound_defers_to_pending_row() {
     // Pending is durable local intent. Even when the inbound event would win
     // the relay's id tie-break, applying it here would clear `pending_sync` and
     // silently drop the user's unpublished edit — the exact class of loss this
@@ -519,7 +599,7 @@ fn test_equal_second_lower_id_inbound_still_loses_to_pending_row() {
     };
     assert_eq!(
         retain_inbound_event(&conn, &inbound).unwrap(),
-        InboundOutcome::Skipped
+        InboundOutcome::Deferred
     );
 
     let row = get_retained_event(&conn, 30175, "abc123", "test-persona")
@@ -574,17 +654,18 @@ fn test_equal_second_unorderable_pair_leaves_retained_row_standing() {
 }
 
 #[test]
-fn test_strictly_newer_inbound_wins_regardless_of_event_id() {
-    // The id is only a tie-break. A strictly newer event wins even when its id
-    // is higher, and even against a pending row — the relay already superseded
-    // that edit, so republishing it would loop.
+fn test_strictly_newer_inbound_defers_regardless_of_event_id() {
+    // The id is only a tie-break, and it is never reached against a pending
+    // row: pending outranks every ordering rule, so a strictly newer inbound
+    // event defers whatever its id. Guards the case where the pending row holds
+    // the LOWER id — no reading of the tie-break can turn this into an apply.
     let conn = test_db();
     let (lower, higher) = lower_and_higher_ids();
     retain_event(
         &conn,
         &RetainedEvent {
             pending_sync: true,
-            event_id: Some(lower),
+            event_id: Some(lower.clone()),
             ..sample_event()
         },
     )
@@ -599,14 +680,15 @@ fn test_strictly_newer_inbound_wins_regardless_of_event_id() {
     };
     assert_eq!(
         retain_inbound_event(&conn, &inbound).unwrap(),
-        InboundOutcome::Applied
+        InboundOutcome::Deferred
     );
 
     let row = get_retained_event(&conn, 30175, "abc123", "test-persona")
         .unwrap()
         .unwrap();
-    assert_eq!(row.created_at, 2000);
-    assert!(!row.pending_sync);
+    assert_eq!(row.created_at, 1000);
+    assert!(row.pending_sync);
+    assert_eq!(row.event_id, Some(lower));
 }
 
 #[test]

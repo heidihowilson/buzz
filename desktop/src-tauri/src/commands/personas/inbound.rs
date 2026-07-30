@@ -39,9 +39,9 @@ mod inbound_tests;
 ///
 /// The retention store decides whether the inbound event wins over a pending
 /// local edit (`retain_inbound_event`): `personas.json` is only patched when the
-/// retain reports [`InboundOutcome::Applied`], so an equal-second collision with
-/// a pending local edit leaves the local record — and its queued publish —
-/// untouched.
+/// retain reports [`InboundOutcome::Applied`], so an inbound event colliding
+/// with a pending local edit — at any timestamp, newer included — leaves the
+/// local record and its queued publish untouched.
 ///
 /// `arrival_relay_url` is the relay the calling subscription is bound to. The
 /// retention store this event belongs to is decided by the community that
@@ -134,7 +134,7 @@ fn reconcile_inbound_persona_event_blocking(
         &conn,
         &RetainedEvent::inbound(kind, event.pubkey.to_hex(), d_tag.clone(), &event),
     )?;
-    if outcome == InboundOutcome::Skipped {
+    if outcome != InboundOutcome::Applied {
         return Ok(());
     }
 
@@ -250,8 +250,9 @@ fn reconcile_inbound_tombstone(
         .map_err(|error| error.to_string())?;
 
     // Resolve against the retained tombstone row (keyed by the target
-    // coordinate, F2c) so a re-received tombstone or one older than a pending
-    // local edit is a no-op. Scoped to the arrival community, so a workspace
+    // coordinate, F2c) so a re-received tombstone, one that loses the ordering
+    // compare, or one landing on a pending tombstone of its own is a no-op.
+    // Scoped to the arrival community, so a workspace
     // switch since arrival drops the tombstone instead of retaining it — and
     // deleting a record — in the wrong community's store.
     let Some(scope) =
@@ -269,7 +270,7 @@ fn reconcile_inbound_tombstone(
             event,
         ),
     )?;
-    if outcome == InboundOutcome::Skipped {
+    if outcome != InboundOutcome::Applied {
         return Ok(());
     }
 

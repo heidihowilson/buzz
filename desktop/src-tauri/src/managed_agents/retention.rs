@@ -145,8 +145,11 @@ impl RetainedEvent {
     /// A row for a locally signed event that still has to reach the relay.
     ///
     /// Every event-derived field is read from the one event passed in, so a row
-    /// can never carry an `event_id` that describes different bytes than its own
-    /// `raw_event` — the ordering key and the payload cannot drift apart.
+    /// built this way cannot carry an `event_id` describing different bytes
+    /// than its own `raw_event`. The fields stay public for test construction,
+    /// so this is the rule every production writer follows rather than a type
+    /// guarantee: build rows through these constructors and the ordering key
+    /// and the payload cannot drift apart.
     pub fn pending(kind: u32, pubkey: String, d_tag: String, event: &nostr::Event) -> Self {
         Self::from_signed(kind, pubkey, d_tag, event, true)
     }
@@ -303,15 +306,23 @@ pub fn retain_event(conn: &Connection, event: &RetainedEvent) -> Result<(), Stri
 
 /// Outcome of an inbound retain — whether the local store now reflects the
 /// inbound event, so the caller knows whether to patch `personas.json`.
+///
+/// Only [`InboundOutcome::Applied`] authorizes a disk write. Both other
+/// variants leave every local file untouched; they differ in what the
+/// coordinate is waiting for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InboundOutcome {
-    /// The inbound event was applied (no row, or it was strictly newer than a
-    /// non-conflicting local row). The caller patches the local record store.
+    /// The inbound event was applied (no row, or it beat a non-pending local
+    /// row). The caller patches the local record store.
     Applied,
-    /// The inbound event was NOT applied: either it is older than the retained
-    /// row, or it collides at the same `created_at` with a pending local edit.
-    /// The local record store is left untouched and the pending edit republishes.
+    /// The inbound event lost the ordering compare against a non-pending
+    /// retained row, or the pair could not be ordered at all. Nothing changes.
     Skipped,
+    /// The coordinate carries a pending local edit, so the inbound event is
+    /// not resolved here at any timestamp. The retained row, its content, and
+    /// its `pending_sync` flag are left exactly as they were, for the boot
+    /// decision pass to arbitrate against a writer-consistent head.
+    Deferred,
 }
 
 /// Retain an event arriving FROM the relay, resolving it against any local row.
@@ -319,37 +330,58 @@ pub enum InboundOutcome {
 /// Inbound events are already on the relay, so they are retained with
 /// `pending_sync = 0`. The resolution is deliberately narrower than
 /// [`retain_event`]'s blind newer-or-equal upsert, which would clobber a
-/// pending local edit's `pending_sync` flag and silently drop its publish:
+/// pending local edit's `pending_sync` flag and silently drop its publish.
 ///
-/// - No local row, or inbound strictly newer (`created_at >`): apply the
-///   inbound event, clearing `pending_sync`. Inbound wins; a stale local edit
-///   the relay already superseded stops republishing instead of looping.
-/// - Equal `created_at`, local row NOT pending: order by event id, matching the
+/// Resolution order — **pending is checked before any timestamp compare**:
+///
+/// - Local row pending, at ANY inbound `created_at`: defer. Nothing is written
+///   and the caller does not patch disk. See the invariant below.
+/// - No local row, or inbound strictly newer (`created_at >`) than a
+///   non-pending row: apply the inbound event.
+/// - Equal `created_at`, non-pending row: order by event id, matching the
 ///   relay's own NIP-33 comparator — lowest id wins (`buzz-db`'s
 ///   `replace_parameterized_event` rejects an incoming event whose id is `>=`
 ///   the accepted one at an equal timestamp). Without this the local cache can
 ///   disagree with the relay about which of two same-second events is the head,
 ///   and every subsequent compare against that head inherits the error.
-/// - Equal `created_at`, local row pending: skip regardless of id. A pending row
-///   is durable local intent, and intent is arbitrated by the boot decision
-///   pass against a writer-consistent head — never dropped by an id compare
-///   here. (A re-received echo at equal time is also a no-op.)
-/// - Inbound older: skip — nothing to change.
+/// - Inbound older than a non-pending row: skip — nothing to change.
 ///
 /// An unorderable compare is never resolved by guessing: if either side's
 /// `event_id` is `None` at an equal timestamp, the local row stands.
+///
+/// # Why a newer timestamp does not beat pending
+///
+/// `pending_sync = 1` is durable local intent: an edit the user made and this
+/// device has not yet published. A newer `created_at` is not evidence that the
+/// remote content is newer *intent* — the laundering vector this whole change
+/// exists to close mints exactly such events. A stale store re-signs its old
+/// content at `monotonic_created_at = max(now, head + 1)`, so every laundered
+/// revert arrives strictly newer than whatever it is reverting. Letting
+/// strictly-newer inbound clear the flag would therefore destroy an unpublished
+/// edit on precisely the input the fix targets.
+///
+/// Deferring instead is not the final answer, only a safe one: which side wins
+/// is decided by the boot decision pass, which arbitrates the pending row
+/// against a writer-consistent head (and its paired tombstone) rather than
+/// against whichever event happened to arrive first. Until that pass exists, a
+/// pending row shadows genuinely newer remote edits for its coordinate — the
+/// flush normally clears it within seconds, and preserving an edit that can
+/// still be reconciled beats destroying one that cannot be recovered.
 pub fn retain_inbound_event(
     conn: &Connection,
     event: &RetainedEvent,
 ) -> Result<InboundOutcome, String> {
     let existing = get_retained_event(conn, event.kind, &event.pubkey, &event.d_tag)?;
 
+    // Durable local intent outranks every ordering rule below it.
+    if existing.as_ref().is_some_and(|row| row.pending_sync) {
+        return Ok(InboundOutcome::Deferred);
+    }
+
     let apply = match &existing {
         None => true,
         Some(row) if event.created_at > row.created_at => true,
-        Some(row) if event.created_at == row.created_at => {
-            !row.pending_sync && inbound_wins_equal_timestamp(event, row)
-        }
+        Some(row) if event.created_at == row.created_at => inbound_wins_equal_timestamp(event, row),
         // Older: stale.
         Some(_) => false,
     };
@@ -358,9 +390,9 @@ pub fn retain_inbound_event(
         return Ok(InboundOutcome::Skipped);
     }
 
-    // Inbound is strictly newer (or there was no row): overwrite and clear
-    // `pending_sync`. No upsert guard is needed — the Rust check above already
-    // established that this event wins.
+    // Inbound wins over a non-pending row (or there was no row): overwrite.
+    // `pending_sync` is written as 0 to state the row's published status
+    // explicitly; the guard above means it can never have been 1 here.
     conn.execute(
         "INSERT INTO persona_events (kind, pubkey, d_tag, content, created_at, raw_event, pending_sync, event_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7)
