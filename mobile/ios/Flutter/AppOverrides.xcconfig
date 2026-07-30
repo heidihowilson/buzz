@@ -1,0 +1,6 @@
+// Seth self-published TestFlight build. Kept in the file the upstream project
+// designates for app-specific overrides, so syncing the fork never conflicts.
+BUNDLE_IDENTIFIER = com.sethgholson.buzz
+APP_DISPLAY_NAME = Buzz
+DEVELOPMENT_TEAM = 6P7A4NEZQT
+CODE_SIGN_STYLE = Automatic
