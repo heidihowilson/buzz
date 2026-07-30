@@ -126,6 +126,7 @@ export default defineConfig({
         "**/observer-archive-policy.spec.ts",
         "**/harness-management.spec.ts",
         "**/harness-catalog-screenshots.spec.ts",
+        "**/team-catalog-screenshots.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
