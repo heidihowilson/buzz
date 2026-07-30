@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'accent_colors.dart';
+
 /// Name of the first-party Buzz theme. Buzz reuses the GitHub Light palette for
 /// every base color; the one thing that sets it apart is a branded gradient
 /// painted across the app's top section. Mirrors desktop, where the same
@@ -16,6 +18,13 @@ const buzzDarkThemeName = 'buzz-dark';
 /// gradient so System mode keeps it on across an OS light/dark switch.
 bool isBuzzTheme(String themeName) =>
     themeName == buzzThemeName || themeName == buzzDarkThemeName;
+
+/// Buzz renders with its fixed neutral foreground while preserving the stored
+/// wire accent so the user's choice returns on another theme.
+int effectiveAccentIndex(String themeName, String storedAccent) {
+  if (isBuzzTheme(themeName)) return neutralAccentIndex;
+  return accentIndexForWireValue(storedAccent) ?? defaultAccentIndex;
+}
 
 /// Gradient stops, matching desktop's `--buzz-gradient-*` custom properties.
 const _lightTop = Color(0xFFE6E6B6);
