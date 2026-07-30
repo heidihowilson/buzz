@@ -180,7 +180,9 @@ const overrides = new Map([
   // Windows Doctor install fix: cli_install_commands_windows field added to test stubs.
   // team-instructions-first-class: ManagedAgentRecord fixture gains the new
   // team_id field (+1 line).
-  ["src-tauri/src/managed_agents/readiness.rs", 1863],
+  // +1 (1863 -> 1864): the ManagedAgentRecord fixture sets the new mandatory
+  // `team_catalog_source` field (kind:30178 member provenance).
+  ["src-tauri/src/managed_agents/readiness.rs", 1864],
   // Windows PATH-correctness fix: 3 #[cfg(windows)] test functions covering
   // .cmd shim rejection, .bat shim rejection, and .exe acceptance for
   // configure_runtime_cli (fix #2397). Test-only growth; queued to split.
@@ -403,7 +405,9 @@ const overrides = new Map([
   // regressions for the fail-closed parse.
   // +2 (1922 -> 1924): the AgentDefinition and ManagedAgentRecord fixtures each
   // set the new mandatory `catalog_source` field.
-  ["src-tauri/src/managed_agents/discovery/tests.rs", 1924],
+  // +2 (1924 -> 1926): the same two fixtures set the new mandatory
+  // `team_catalog_source` field (kind:30178 member provenance).
+  ["src-tauri/src/managed_agents/discovery/tests.rs", 1926],
   // identity-import-keyring: the identity resolution state machine's behavioral
   // matrix (46 tests over FakeIdentityStore — probe × marker × file cells,
   // adoption / read-back-corruption / marker-failure arms, recovery-mode
@@ -600,7 +604,9 @@ const overrides = new Map([
   // persona-model re-tag branch replaced; two new regression tests added.
   // +2 (1110 -> 1112): the agent_record and persona_with_model test fixtures
   // each set the new mandatory `catalog_source` field.
-  ["src-tauri/src/commands/agent_config.rs", 1112],
+  // +2 (1112 -> 1114): the same two fixtures set the new mandatory
+  // `team_catalog_source` field (kind:30178 member provenance).
+  ["src-tauri/src/commands/agent_config.rs", 1114],
   // codex-install-auto-restart review-fixes: should_restart_after_install
   // takes pid_alive:bool (pure predicate, no OS-dependent call); 3 racy
   // cache tests replaced with 6 pure availability_drift predicate tests;
@@ -707,6 +713,11 @@ const overrides = new Map([
   // (rAF retry loop) took this file 999 -> 1026 and landed without this entry,
   // so main's Desktop Core went red. Queued to split with the rest of this list.
   ["src/features/agents/ui/AgentCreationPreview.tsx", 1026],
+  // Both crossed the 1000 default by exactly the one line their fixture needs
+  // for the new mandatory `team_catalog_source` field (kind:30178 member
+  // provenance). Queued to split with the rest of this list.
+  ["src-tauri/src/commands/personas/snapshot/tests.rs", 1001],
+  ["src-tauri/src/managed_agents/agent_snapshot.rs", 1001],
 ]);
 
 await runFileSizeCheck({
