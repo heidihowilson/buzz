@@ -46,8 +46,18 @@ export function startPersonaSync(
 
   // One-shot backfill of existing heads + tombstones (closes the fresh-start
   // gap that live-only subscription + reconnect-replay cannot recover).
+  //
+  // Writer-pinned: these results feed the sync state machine, which reads a
+  // missing head as "deleted upstream". A read replica that has not replayed
+  // an event yet returns the same empty result as a real deletion, and no
+  // staleness budget distinguishes them — so this read must not be routed.
   void relayClient
-    .fetchEvents({ kinds: PERSONA_SYNC_KINDS, authors: [pubkey], limit: 500 })
+    .fetchEvents({
+      kinds: PERSONA_SYNC_KINDS,
+      authors: [pubkey],
+      limit: 500,
+      sync_authoritative: true,
+    })
     .then((events) => {
       if (onCancelled()) return;
       for (const event of events) reconcile(event);

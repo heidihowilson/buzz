@@ -22,6 +22,14 @@ pub enum ClientMessage {
         sub_id: String,
         /// The filters that determine which events are delivered.
         filters: Vec<Filter>,
+        /// Whether the historical read for this REQ must be served from the
+        /// writer pool (`sync_authoritative` on any filter).
+        ///
+        /// Subscription-wide rather than per-filter: one REQ produces one
+        /// deduplicated historical result set, so serving part of it from a
+        /// replica would leave the caller unable to say which events were
+        /// writer-consistent. Opting in anywhere pins the whole read.
+        sync_authoritative: bool,
     },
     /// A CLOSE message cancelling an active subscription.
     Close(String),
@@ -34,6 +42,32 @@ pub enum ClientMessage {
     },
     /// An AUTH message responding to a NIP-42 challenge.
     Auth(Event),
+}
+
+/// Read the `sync_authoritative` opt-in from a REQ's raw filter values.
+///
+/// Mirrors the HTTP bridge's `extract_sync_authoritative`: a caller sets this
+/// when absence of a result is itself a decision, which a lagging read replica
+/// cannot be distinguished from. A non-boolean value is rejected rather than
+/// treated as absent — silently downgrading a consistency request returns a
+/// wrong answer the caller has no way to detect.
+///
+/// True when ANY filter opts in; see [`ClientMessage::Req::sync_authoritative`]
+/// for why this is subscription-wide.
+fn parse_sync_authoritative(filter_values: &[Value]) -> Result<bool> {
+    let mut pinned = false;
+    for value in filter_values {
+        match value.get("sync_authoritative") {
+            None => {}
+            Some(Value::Bool(flag)) => pinned |= flag,
+            Some(_) => {
+                return Err(RelayError::InvalidMessage(
+                    "sync_authoritative must be a boolean".to_string(),
+                ))
+            }
+        }
+    }
+    Ok(pinned)
 }
 
 impl ClientMessage {
@@ -103,7 +137,12 @@ impl ClientMessage {
                             .map_err(|e| RelayError::InvalidMessage(format!("invalid filter: {e}")))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok(ClientMessage::Req { sub_id, filters })
+                let sync_authoritative = parse_sync_authoritative(filter_values)?;
+                Ok(ClientMessage::Req {
+                    sub_id,
+                    filters,
+                    sync_authoritative,
+                })
             }
             "COUNT" => {
                 if arr.len() < 2 {
@@ -252,9 +291,14 @@ mod tests {
                 &serde_json::json!(["REQ", "sub1", serde_json::to_value(&filter).unwrap()])
                     .to_string(),
                 Box::new(|m| match m {
-                    ClientMessage::Req { sub_id, filters } => {
+                    ClientMessage::Req {
+                        sub_id,
+                        filters,
+                        sync_authoritative,
+                    } => {
                         assert_eq!(sub_id, "sub1");
                         assert_eq!(filters.len(), 1);
+                        assert!(!sync_authoritative, "plain REQ must not pin the read");
                     }
                     _ => panic!("expected Req"),
                 }),
@@ -294,9 +338,14 @@ mod tests {
         ])
         .to_string();
         match ClientMessage::parse(&raw).unwrap() {
-            ClientMessage::Req { sub_id, filters } => {
+            ClientMessage::Req {
+                sub_id,
+                filters,
+                sync_authoritative,
+            } => {
                 assert_eq!(sub_id, "sub2");
                 assert_eq!(filters.len(), 2);
+                assert!(!sync_authoritative);
             }
             _ => panic!("expected Req"),
         }
@@ -320,6 +369,68 @@ mod tests {
                 "expected InvalidMessage for {raw:?}, got {err:?}"
             );
             let _ = hint; // used for readability only
+        }
+    }
+
+    /// `sync_authoritative` pins the whole subscription's historical read when
+    /// any filter opts in — one REQ yields one deduplicated result set, so a
+    /// partially-replica-served page would be unattributable.
+    #[test]
+    fn parse_req_sync_authoritative_pins_when_any_filter_opts_in() {
+        let plain = serde_json::json!({ "kinds": [30175] });
+        let pinned = serde_json::json!({ "kinds": [30175], "sync_authoritative": true });
+
+        let cases = [
+            (vec![plain.clone()], false),
+            (
+                vec![serde_json::json!({ "kinds": [1], "sync_authoritative": false })],
+                false,
+            ),
+            (vec![pinned.clone()], true),
+            (vec![plain.clone(), pinned.clone()], true),
+            (vec![pinned, plain], true),
+        ];
+
+        for (filters, expected) in cases {
+            let mut frame = vec![serde_json::json!("REQ"), serde_json::json!("sub1")];
+            frame.extend(filters.iter().cloned());
+            let raw = serde_json::Value::Array(frame).to_string();
+            match ClientMessage::parse(&raw).unwrap() {
+                ClientMessage::Req {
+                    sync_authoritative, ..
+                } => assert_eq!(
+                    sync_authoritative, expected,
+                    "wrong pinning for filters {filters:?}"
+                ),
+                _ => panic!("expected Req"),
+            }
+        }
+    }
+
+    /// A non-boolean value rejects the REQ rather than degrading to unpinned:
+    /// silently downgrading a consistency request returns a wrong answer the
+    /// caller cannot detect.
+    #[test]
+    fn parse_req_sync_authoritative_non_boolean_is_rejected() {
+        for value in [
+            serde_json::json!("true"),
+            serde_json::json!(1),
+            serde_json::json!(null),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            let raw = serde_json::json!([
+                "REQ",
+                "sub1",
+                { "kinds": [30175], "sync_authoritative": value }
+            ])
+            .to_string();
+            let err =
+                ClientMessage::parse(&raw).expect_err(&format!("expected {value} to be rejected"));
+            assert!(
+                matches!(&err, RelayError::InvalidMessage(m) if m.contains("sync_authoritative")),
+                "expected a sync_authoritative InvalidMessage, got {err:?}"
+            );
         }
     }
 

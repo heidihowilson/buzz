@@ -44,6 +44,7 @@ const _: () = assert!(FILTER_QUERY_CONCURRENCY >= 2 && FILTER_QUERY_CONCURRENCY 
 pub async fn handle_req(
     sub_id: String,
     filters: Vec<Filter>,
+    sync_authoritative: bool,
     conn: Arc<ConnectionState>,
     state: Arc<AppState>,
 ) {
@@ -304,13 +305,21 @@ pub async fn handle_req(
     // yields results in input order, so phase 3 observes filters in their
     // original order and NIP-01 dedupe / conformance-trace / error semantics are
     // byte-identical to the previous serial loop.
+    //
+    // A `sync_authoritative` REQ takes `query_events` (writer pool): its caller
+    // acts on absence, which a not-yet-replayed replica is indistinguishable
+    // from. Every other subscription routes exactly as before.
     use futures_util::stream::{self, StreamExt};
     let db = state.db.clone();
     let mut results = stream::iter(filter_queries.into_iter().map(
         |(idx, per_filter_channel, params)| {
             let db = db.clone();
             async move {
-                let filter_events = db.query_events_routed("req_historical", &params).await;
+                let filter_events = if sync_authoritative {
+                    db.query_events(&params).await
+                } else {
+                    db.query_events_routed("req_historical", &params).await
+                };
                 (idx, per_filter_channel, filter_events)
             }
         },

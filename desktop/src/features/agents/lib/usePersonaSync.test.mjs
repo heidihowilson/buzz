@@ -48,12 +48,25 @@ test("startPersonaSync backfills history including the deletion kind", () => {
     "backfill must request a positive limit — limit:0 returns no history",
   );
   assert.deepEqual(fetchCalls[0].authors, ["owner-pubkey"]);
+  // The backfill feeds the sync state machine, which reads a missing head as
+  // "deleted upstream" — a lagging read replica returns that same empty result.
+  assert.equal(
+    fetchCalls[0].sync_authoritative,
+    true,
+    "backfill must be writer-pinned: absence is a decision here",
+  );
 
   assert.equal(liveCalls.length, 1);
   assert.deepEqual(
     liveCalls[0].kinds,
     EXPECTED_KINDS,
     "live sub must also carry the deletion kind",
+  );
+  // Fan-out of newly written events, not a historical read — pinning it would
+  // spend a writer connection for the lifetime of the subscription.
+  assert.ok(
+    !liveCalls[0].sync_authoritative,
+    "live subscription must NOT be writer-pinned",
   );
 
   mock.reset();

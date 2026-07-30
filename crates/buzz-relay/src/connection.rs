@@ -535,7 +535,11 @@ async fn handle_text_message(text: String, conn: Arc<ConnectionState>, state: Ar
                 .instrument(span),
             );
         }
-        ClientMessage::Req { sub_id, filters } => {
+        ClientMessage::Req {
+            sub_id,
+            filters,
+            sync_authoritative,
+        } => {
             let conn = Arc::clone(&conn);
             let state = Arc::clone(&state);
             let permit = match state.handler_semaphore.clone().try_acquire_owned() {
@@ -551,7 +555,8 @@ async fn handle_text_message(text: String, conn: Arc<ConnectionState>, state: Ar
             let span = tracing::info_span!("ws.req", conn_id = %conn.conn_id, sub_id = %sub_id);
             tokio::spawn(
                 async move {
-                    handlers::req::handle_req(sub_id, filters, conn, state).await;
+                    handlers::req::handle_req(sub_id, filters, sync_authoritative, conn, state)
+                        .await;
                     drop(permit);
                 }
                 .instrument(span),

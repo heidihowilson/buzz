@@ -36,6 +36,17 @@ export type RelaySubscriptionFilter = {
   authors?: string[];
   since?: number;
   until?: number;
+  /**
+   * Serve this subscription's historical read from the relay's writer pool
+   * instead of a read replica.
+   *
+   * Set this only when absence of a result is itself a decision — the
+   * persona/team/agent sync state machine reads a coordinate's head and treats
+   * "no event" as "deleted upstream", which a not-yet-replayed replica is
+   * indistinguishable from. Display reads must leave it unset so they keep the
+   * replica offload.
+   */
+  sync_authoritative?: boolean;
 } & Partial<Record<`#${string}`, string[]>>;
 
 type HistorySubscription = {
