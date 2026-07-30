@@ -1999,15 +1999,14 @@ function MarkdownInner({
           ) : null}
           {resolvedLinkPreviews.length > 0 ? (
             <AttachmentGroup
-              className="max-w-full flex-wrap overflow-visible pb-0"
+              className="max-w-full flex-col items-start overflow-visible pb-0"
               data-link-preview-list=""
             >
               {resolvedLinkPreviews.map((preview, index) => (
                 <LinkPreviewAttachment
                   key={preview.href}
                   onRemove={
-                    onRemoveLinkPreviewsForEveryone &&
-                    index === resolvedLinkPreviews.length - 1
+                    onRemoveLinkPreviewsForEveryone && index === 0
                       ? () => setRemovePreviewDialogOpen(true)
                       : undefined
                   }

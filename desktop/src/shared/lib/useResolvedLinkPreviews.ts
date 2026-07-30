@@ -10,6 +10,7 @@ type LinkPreviewMetadata = {
   description: string | null;
   imageDataUrl: string | null;
   imageDomain: string | null;
+  faviconDataUrl?: string | null;
 };
 
 const metadataCache = new Map<
@@ -55,6 +56,7 @@ export type LinkPreviewImageState = "pending" | "image" | "none";
 
 export type ResolvedLinkPreview = SupportedLinkPreview & {
   description?: string | null;
+  faviconDataUrl?: string | null;
   imageState: LinkPreviewImageState;
 };
 
@@ -79,6 +81,7 @@ export function resolveLinkPreview(
     ...preview,
     title: metadata.title,
     description: metadata.description,
+    faviconDataUrl: metadata.faviconDataUrl,
     provider:
       preview.kind === "generic-link" && metadata.siteName
         ? metadata.siteName

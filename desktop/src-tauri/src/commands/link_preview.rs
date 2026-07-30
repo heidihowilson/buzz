@@ -29,6 +29,7 @@ pub struct LinkPreviewMetadata {
     description: Option<String>,
     image_data_url: Option<String>,
     image_domain: Option<String>,
+    favicon_data_url: Option<String>,
 }
 
 #[tauri::command]
@@ -78,9 +79,14 @@ async fn fetch_link_preview_metadata_inner(
             return Ok(None);
         };
         if let Some(image_url) = extract_image_url(&body, &url) {
-            if let Ok((data_url, domain)) = fetch_sanitized_image(image_url).await {
+            if let Ok((data_url, domain)) = fetch_sanitized_image(image_url, false).await {
                 metadata.image_data_url = Some(data_url);
                 metadata.image_domain = Some(domain);
+            }
+        }
+        if let Some(favicon_url) = extract_favicon_url(&body, &url) {
+            if let Ok((data_url, _)) = fetch_sanitized_image(favicon_url, true).await {
+                metadata.favicon_data_url = Some(data_url);
             }
         }
         return Ok(Some(metadata));
@@ -190,6 +196,53 @@ async fn read_limited_bytes(response: reqwest::Response, limit: usize) -> Result
     Ok(bytes)
 }
 
+fn extract_favicon_url(html: &str, page_url: &Url) -> Option<Url> {
+    let lower = html.to_ascii_lowercase();
+    let mut search_from = 0;
+    let mut fallback = None;
+
+    while let Some(relative_start) = lower[search_from..].find("<link") {
+        let start = search_from + relative_start;
+        let Some(relative_end) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + relative_end + 1;
+        let tag = &html[start..end];
+        let rel = attr_value(tag, "rel");
+        let is_icon = rel.as_ref().is_some_and(|value| {
+            value.split_ascii_whitespace().any(|token| {
+                token.eq_ignore_ascii_case("icon") || token.eq_ignore_ascii_case("apple-touch-icon")
+            })
+        });
+        if is_icon {
+            if let Some(href) = attr_value(tag, "href") {
+                if let Ok(url) = page_url.join(href.trim()) {
+                    let declared_type = attr_value(tag, "type");
+                    let is_supported_raster = declared_type.as_ref().is_some_and(|value| {
+                        matches!(
+                            value.to_ascii_lowercase().as_str(),
+                            "image/jpeg" | "image/png" | "image/webp"
+                        )
+                    }) || matches!(
+                        url.path()
+                            .rsplit_once('.')
+                            .map(|(_, extension)| extension.to_ascii_lowercase())
+                            .as_deref(),
+                        Some("jpg" | "jpeg" | "png" | "webp")
+                    );
+                    if is_supported_raster {
+                        return Some(url);
+                    }
+                    fallback.get_or_insert(url);
+                }
+            }
+        }
+        search_from = end;
+    }
+
+    fallback
+}
+
 fn extract_image_url(html: &str, page_url: &Url) -> Option<Url> {
     let raw = extract_meta_content(html, "property", "og:image")
         .or_else(|| extract_meta_content(html, "property", "og:image:secure_url"))
@@ -197,7 +250,10 @@ fn extract_image_url(html: &str, page_url: &Url) -> Option<Url> {
     page_url.join(raw.trim()).ok()
 }
 
-async fn fetch_sanitized_image(mut url: Url) -> Result<(String, String), String> {
+async fn fetch_sanitized_image(
+    mut url: Url,
+    preserve_transparency: bool,
+) -> Result<(String, String), String> {
     validate_public_https_url(&url).await?;
     for redirect_count in 0..=MAX_REDIRECTS {
         let response = send_pinned_request(&url, "image/jpeg,image/png,image/webp").await?;
@@ -245,16 +301,22 @@ async fn fetch_sanitized_image(mut url: Url) -> Result<(String, String), String>
             return Err("link preview image exceeded the size limit".to_string());
         }
         let bytes = read_limited_bytes(response, MAX_IMAGE_FETCH_BYTES).await?;
-        let data_url = tokio::task::spawn_blocking(move || sanitize_image(&bytes, &declared_mime))
-            .await
-            .map_err(|_| "link preview image sanitizer failed".to_string())??;
+        let data_url = tokio::task::spawn_blocking(move || {
+            sanitize_image(&bytes, &declared_mime, preserve_transparency)
+        })
+        .await
+        .map_err(|_| "link preview image sanitizer failed".to_string())??;
         let domain = url.host_str().unwrap_or_default().to_string();
         return Ok((data_url, domain));
     }
     Err("link preview image fetch failed".to_string())
 }
 
-fn sanitize_image(bytes: &[u8], declared_mime: &str) -> Result<String, String> {
+fn sanitize_image(
+    bytes: &[u8],
+    declared_mime: &str,
+    preserve_transparency: bool,
+) -> Result<String, String> {
     let sniffed = infer::get(bytes)
         .map(|kind| kind.mime_type())
         .ok_or_else(|| "link preview image magic bytes are unsupported".to_string())?;
@@ -299,6 +361,15 @@ fn sanitize_image(bytes: &[u8], declared_mime: &str) -> Result<String, String> {
     decoded.apply_orientation(orientation);
     let decoded = decoded.thumbnail(MAX_SANITIZED_DIMENSION, MAX_SANITIZED_DIMENSION);
     let mut output = Vec::new();
+    if preserve_transparency && decoded.color().has_alpha() {
+        decoded
+            .write_to(&mut Cursor::new(&mut output), image::ImageFormat::Png)
+            .map_err(|_| "link preview image could not be sanitized".to_string())?;
+        return Ok(format!(
+            "data:image/png;base64,{}",
+            BASE64_STANDARD.encode(output)
+        ));
+    }
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 82)
         .encode_image(&decoded)
         .map_err(|_| "link preview image could not be sanitized".to_string())?;
@@ -339,6 +410,7 @@ fn extract_link_preview_metadata(html: &str) -> Option<LinkPreviewMetadata> {
         description,
         image_data_url: None,
         image_domain: None,
+        favicon_data_url: None,
     })
 }
 
@@ -463,13 +535,14 @@ fn decode_html_entities(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        declares_animation, extract_image_url, extract_link_preview_metadata, is_html_response,
-        read_bytes_prefix, sanitize_image, LinkPreviewMetadata,
+        declares_animation, extract_favicon_url, extract_image_url, extract_link_preview_metadata,
+        is_html_response, read_bytes_prefix, sanitize_image, LinkPreviewMetadata,
     };
     use axum::{body::Body, http::Response, routing::get, Router};
+    use base64::Engine as _;
     use bytes::Bytes;
     use futures_util::stream;
-    use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
+    use image::{DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
     use std::{convert::Infallible, io::Cursor};
     use url::Url;
 
@@ -498,6 +571,7 @@ mod tests {
                 description: Some("Safe & useful previews".to_string()),
                 image_data_url: None,
                 image_domain: None,
+                favicon_data_url: None,
             })
         );
     }
@@ -513,6 +587,40 @@ mod tests {
             extract_link_preview_metadata("<title> Plain   title </title>")
                 .map(|metadata| metadata.title),
             Some("Plain title".to_string())
+        );
+    }
+
+    #[test]
+    fn favicon_metadata_resolves_relative_icon_links() {
+        let page = Url::parse("https://example.com/articles/one").unwrap();
+        let html = r#"<link rel="stylesheet" href="styles.css">
+          <link href="../favicon.png" rel="shortcut icon">"#;
+        assert_eq!(
+            extract_favicon_url(html, &page).unwrap().as_str(),
+            "https://example.com/favicon.png"
+        );
+    }
+
+    #[test]
+    fn favicon_metadata_prefers_a_supported_raster_candidate() {
+        let page = Url::parse("https://github.com/block/buzz").unwrap();
+        let html = r#"<link rel="mask-icon" href="https://assets.example/favicon.svg">
+          <link rel="alternate icon" type="image/png" href="https://assets.example/favicon.png">
+          <link rel="icon" type="image/svg+xml" href="https://assets.example/favicon.svg">"#;
+        assert_eq!(
+            extract_favicon_url(html, &page).unwrap().as_str(),
+            "https://assets.example/favicon.png"
+        );
+    }
+
+    #[test]
+    fn favicon_metadata_uses_touch_icon_before_unsupported_ico() {
+        let page = Url::parse("https://twitter.com/tellaho").unwrap();
+        let html = r#"<link rel="icon" href="/favicon.ico">
+          <link rel="apple-touch-icon" sizes="192x192" href="/apple-touch-icon.png">"#;
+        assert_eq!(
+            extract_favicon_url(html, &page).unwrap().as_str(),
+            "https://twitter.com/apple-touch-icon.png"
         );
     }
 
@@ -602,9 +710,24 @@ mod tests {
         let source = DynamicImage::ImageRgb8(RgbImage::from_pixel(2, 2, Rgb([10, 20, 30])));
         let mut png = Cursor::new(Vec::new());
         source.write_to(&mut png, ImageFormat::Png).unwrap();
-        assert!(sanitize_image(png.get_ref(), "image/jpeg").is_err());
-        let sanitized = sanitize_image(png.get_ref(), "image/png").unwrap();
+        assert!(sanitize_image(png.get_ref(), "image/jpeg", false).is_err());
+        let sanitized = sanitize_image(png.get_ref(), "image/png", false).unwrap();
         assert!(sanitized.starts_with("data:image/jpeg;base64,"));
+    }
+
+    #[test]
+    fn favicon_sanitizer_preserves_png_transparency() {
+        let source = DynamicImage::ImageRgba8(RgbaImage::from_pixel(2, 2, Rgba([36, 41, 47, 0])));
+        let mut png = Cursor::new(Vec::new());
+        source.write_to(&mut png, ImageFormat::Png).unwrap();
+
+        let sanitized = sanitize_image(png.get_ref(), "image/png", true).unwrap();
+        assert!(sanitized.starts_with("data:image/png;base64,"));
+        let encoded = sanitized.split_once(',').unwrap().1;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        assert!(image::load_from_memory(&bytes).unwrap().color().has_alpha());
     }
 
     #[test]
