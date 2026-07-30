@@ -4,18 +4,17 @@ use tauri::{AppHandle, State};
 mod forum;
 
 use forum::{
-    apply_link_preview_suppression, fetch_agent_owner_pubkeys, forum_message_from_event,
-    forum_reply_from_event, link_preview_suppression_targets,
+    apply_link_preview_suppression, fetch_agent_owner_pubkeys, link_preview_suppression_targets,
 };
+pub use forum::{get_forum_posts, get_forum_thread};
 
 use crate::{
     app_state::AppState,
     events,
     managed_agents::{find_managed_agent_mut, load_managed_agents, ManagedAgentRecord},
     models::{
-        FeedItemInfo, FeedMeta, FeedResponse, FeedSections, ForumMessageInfo, ForumPostsResponse,
-        ForumThreadReplyInfo, ForumThreadResponse, SearchResponse, SendChannelMessageResponse,
-        ThreadRepliesResponse,
+        FeedItemInfo, FeedMeta, FeedResponse, FeedSections, SearchResponse,
+        SendChannelMessageResponse, ThreadRepliesResponse,
     },
     nostr_convert,
     relay::{query_relay, submit_event, submit_event_with_keys},
@@ -228,119 +227,6 @@ pub async fn search_messages(
 
     let events = query_relay(&state, &[filter]).await?;
     Ok(nostr_convert::search_response_from_events(&events))
-}
-
-#[tauri::command]
-pub async fn get_forum_posts(
-    channel_id: String,
-    limit: Option<u32>,
-    before: Option<i64>,
-    state: State<'_, AppState>,
-) -> Result<ForumPostsResponse, String> {
-    let cap = limit.unwrap_or(20).min(100);
-    let mut filter = serde_json::Map::new();
-    filter.insert("kinds".to_string(), serde_json::json!([45001]));
-    filter.insert("#h".to_string(), serde_json::json!([channel_id.clone()]));
-    filter.insert("limit".to_string(), serde_json::json!(cap));
-    if let Some(t) = before {
-        filter.insert("until".to_string(), serde_json::json!(t));
-    }
-
-    let events = query_relay(&state, &[serde_json::Value::Object(filter)]).await?;
-    let ids = events
-        .iter()
-        .map(|event| event.id.to_hex())
-        .collect::<Vec<_>>();
-    let edits = if ids.is_empty() {
-        Vec::new()
-    } else {
-        query_relay(
-            &state,
-            &[serde_json::json!({ "kinds": [40003], "#e": ids })],
-        )
-        .await
-        .unwrap_or_default()
-    };
-    let owner_pubkeys = fetch_agent_owner_pubkeys(&state, &events).await;
-    let suppressed = link_preview_suppression_targets(&events, &edits, &owner_pubkeys);
-    let messages: Vec<ForumMessageInfo> = events
-        .iter()
-        .map(|ev| {
-            let mut message = forum_message_from_event(ev, &channel_id);
-            apply_link_preview_suppression(&mut message.tags, &message.event_id, &suppressed);
-            message
-        })
-        .collect();
-
-    let next_cursor = messages.last().map(|m| m.created_at);
-    Ok(ForumPostsResponse {
-        messages,
-        next_cursor,
-    })
-}
-
-#[tauri::command]
-pub async fn get_forum_thread(
-    channel_id: String,
-    event_id: String,
-    limit: Option<u32>,
-    cursor: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<ForumThreadResponse, String> {
-    let _ = (limit, cursor);
-    // Two filters: the root event itself, plus any reply (kinds 9/45003)
-    // that references it via #e.
-    let events = query_relay(
-        &state,
-        &[
-            serde_json::json!({ "ids": [event_id.clone()], "kinds": [9, 40002, 45001, 45003] }),
-            serde_json::json!({
-                "kinds": [9, 45003],
-                "#e": [event_id.clone()],
-                "#h": [channel_id.clone()],
-            }),
-        ],
-    )
-    .await?;
-    let ids = events
-        .iter()
-        .map(|event| event.id.to_hex())
-        .collect::<Vec<_>>();
-    let edits = if ids.is_empty() {
-        Vec::new()
-    } else {
-        query_relay(
-            &state,
-            &[serde_json::json!({ "kinds": [40003], "#e": ids })],
-        )
-        .await
-        .unwrap_or_default()
-    };
-    let owner_pubkeys = fetch_agent_owner_pubkeys(&state, &events).await;
-    let suppressed = link_preview_suppression_targets(&events, &edits, &owner_pubkeys);
-
-    let mut root: Option<ForumMessageInfo> = None;
-    let mut replies: Vec<ForumThreadReplyInfo> = Vec::new();
-    for ev in &events {
-        if ev.id.to_hex() == event_id {
-            let mut message = forum_message_from_event(ev, &channel_id);
-            apply_link_preview_suppression(&mut message.tags, &message.event_id, &suppressed);
-            root = Some(message);
-        } else if ev.kind.as_u16() as u32 != 40003 {
-            let mut reply = forum_reply_from_event(ev, &channel_id, &event_id);
-            apply_link_preview_suppression(&mut reply.tags, &reply.event_id, &suppressed);
-            replies.push(reply);
-        }
-    }
-    let total_replies = replies.len() as u32;
-
-    let root = root.ok_or_else(|| "forum thread root event not found".to_string())?;
-    Ok(ForumThreadResponse {
-        root,
-        replies,
-        total_replies,
-        next_cursor: None,
-    })
 }
 
 /// Fetch the full reply subtree under a thread root, server-side.

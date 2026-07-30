@@ -32,18 +32,7 @@ import { useResolvedLinkPreviews } from "@/shared/lib/useResolvedLinkPreviews";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { AttachmentGroup } from "@/shared/ui/attachment";
 import { ConfigNudgeCard } from "@/shared/ui/config-nudge-attachment";
-import { LinkPreviewAttachment } from "@/shared/ui/link-preview-attachment";
-import { Button } from "@/shared/ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/shared/ui/alert-dialog";
+import { LinkPreviewList } from "@/shared/ui/link-preview-list";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
 import {
   computeConfigNudge,
@@ -1882,13 +1871,7 @@ function MarkdownInner({
     },
     [goChannel],
   );
-  const [removePreviewDialogOpen, setRemovePreviewDialogOpen] =
-    React.useState(false);
-  const [removedPreviewMessageId, setRemovedPreviewMessageId] = React.useState<
-    string | null
-  >(null);
-  const previewsGloballySuppressed =
-    linkPreviewsSuppressed || removedPreviewMessageId === messageId;
+  const previewsGloballySuppressed = linkPreviewsSuppressed;
   const linkPreviews = React.useMemo(
     () =>
       interactive && !previewsGloballySuppressed
@@ -1931,12 +1914,6 @@ function MarkdownInner({
   );
 
   let processedContent = content;
-
-  // Note: stripping the sentinel here is intentionally omitted. When
-  // configNudge !== null, selectProseOrNudge() returns null — suppressing
-  // the prose node entirely — so processedContent is never rendered and
-  // stripConfigNudgeSentinel would be dead work on that path.
-
   if (/^(?:\s{2}\n)+/.test(processedContent)) {
     processedContent = `\u200B${processedContent}`;
   }
@@ -1946,8 +1923,6 @@ function MarkdownInner({
   }
 
   const resolvedLinkPreviews = useResolvedLinkPreviews(linkPreviews);
-  const previewNoun =
-    resolvedLinkPreviews.length === 1 ? "preview" : "previews";
 
   // When a config-nudge suppresses the prose (selectProseOrNudge returns
   // null), skip the parse entirely — it would be thrown away unrendered.
@@ -1997,70 +1972,11 @@ function MarkdownInner({
               <ConfigNudgeCard nudge={configNudge} />
             </AttachmentGroup>
           ) : null}
-          {resolvedLinkPreviews.length > 0 ? (
-            <AttachmentGroup
-              className="max-w-full flex-col items-start overflow-visible pb-0"
-              data-link-preview-list=""
-            >
-              {resolvedLinkPreviews.map((preview, index) => (
-                <LinkPreviewAttachment
-                  key={preview.href}
-                  onRemove={
-                    onRemoveLinkPreviewsForEveryone && index === 0
-                      ? () => setRemovePreviewDialogOpen(true)
-                      : undefined
-                  }
-                  preview={preview}
-                />
-              ))}
-            </AttachmentGroup>
-          ) : null}
-          {onRemoveLinkPreviewsForEveryone ? (
-            <AlertDialog
-              onOpenChange={setRemovePreviewDialogOpen}
-              open={removePreviewDialogOpen}
-            >
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>
-                    Remove {previewNoun} for everyone?
-                  </AlertDialogTitle>
-                  <AlertDialogDescription>
-                    No one will see{" "}
-                    {resolvedLinkPreviews.length === 1
-                      ? "the preview"
-                      : "the previews"}{" "}
-                    on this message anymore.{" "}
-                    {resolvedLinkPreviews.length === 1
-                      ? "The link itself will stay"
-                      : "The links themselves will stay"}{" "}
-                    in the message. This can't be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel asChild>
-                    <Button type="button" variant="outline">
-                      Cancel
-                    </Button>
-                  </AlertDialogCancel>
-                  <AlertDialogAction asChild>
-                    <Button
-                      onClick={() => {
-                        setRemovedPreviewMessageId(messageId ?? null);
-                        void onRemoveLinkPreviewsForEveryone().catch(() => {
-                          setRemovedPreviewMessageId(null);
-                        });
-                      }}
-                      type="button"
-                      variant="destructive"
-                    >
-                      Remove {previewNoun}
-                    </Button>
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          ) : null}
+          <LinkPreviewList
+            key={messageId}
+            onRemoveForEveryone={onRemoveLinkPreviewsForEveryone}
+            previews={resolvedLinkPreviews}
+          />
         </VideoReviewMarkdownContext.Provider>
       </MarkdownRuntimeContext.Provider>
     </div>
